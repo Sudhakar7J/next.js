@@ -9,6 +9,9 @@ const { linkPackages } = require('./link-packed-packages')
 const lockfile = require('proper-lockfile')
 const yaml = require('js-yaml')
 const {
+  traceLocalSpan,
+} = require('next/dist/server/lib/trace/local-span-recorder')
+const {
   getPnpmSecuritySettings,
   mergeSettingsIntoYaml,
   getYarnSecuritySettings,
@@ -274,7 +277,7 @@ async function lockfileResolvesLocalTarball(
 }
 
 /**
- * @param {import('next/dist/trace').Span} parentSpan
+ * @param {import('@opentelemetry/api').Span} parentSpan
  * @returns {Promise<Map<string, string>>}
  */
 async function packPackages(parentSpan) {
@@ -290,27 +293,30 @@ async function packPackages(parentSpan) {
     retries: { retries: 3600, factor: 1, minTimeout: 1000, maxTimeout: 1000 },
   })
   try {
-    await parentSpan.traceChild('turbo-run-pack').traceAsyncFn(() =>
-      execa(
-        'pnpm',
-        [
-          'turbo',
-          'run',
-          'pack-for-isolated-tests',
-          '--output-logs',
-          'new-only',
-          '--ui',
-          'stream',
-        ],
-        {
-          cwd: repositoryDirectory,
-          stdio: ['ignore', 'inherit', 'inherit'],
-        }
-      )
+    await traceLocalSpan(
+      { name: 'turbo-run-pack', parentSpan, tooling: {} },
+      () =>
+        execa(
+          'pnpm',
+          [
+            'turbo',
+            'run',
+            'pack-for-isolated-tests',
+            '--output-logs',
+            'new-only',
+            '--ui',
+            'stream',
+          ],
+          {
+            cwd: repositoryDirectory,
+            stdio: ['ignore', 'inherit', 'inherit'],
+          }
+        )
     )
-    return await parentSpan
-      .traceChild('linkPackages')
-      .traceAsyncFn(() => linkPackages({ repoDir: repositoryDirectory }))
+    return await traceLocalSpan(
+      { name: 'linkPackages', parentSpan, tooling: {} },
+      () => linkPackages({ repoDir: repositoryDirectory })
+    )
   } finally {
     await release()
   }
@@ -319,13 +325,13 @@ async function packPackages(parentSpan) {
 /**
  *
  * @param {object} param0
- * @param {import('@next/telemetry').Span} param0.parentSpan
+ * @param {import('@opentelemetry/api').Span} [param0.parentSpan]
  * @param {object} [param0.dependencies]
  * @param {object | null} [param0.resolutions]
  * @param { ((ctx: { dependencies: { [key: string]: string } }) => string) | string | null} [param0.installCommand]
  * @param {object} [param0.packageJson]
  * @param {string} [param0.subDir]
- * @param {(span: import('@next/telemetry').Span, installDir: string) => Promise<void>} [param0.beforeInstall]
+ * @param {(span: import('@opentelemetry/api').Span, installDir: string) => Promise<void>} [param0.beforeInstall]
  * @returns {Promise<{installDir: string, pkgPaths: Map<string, string>}>}
  */
 async function createNextInstall({
@@ -339,9 +345,9 @@ async function createNextInstall({
 }) {
   const tmpDir = await fs.realpath(process.env.NEXT_TEST_DIR || os.tmpdir())
 
-  return await parentSpan
-    .traceChild('createNextInstall')
-    .traceAsyncFn(async (rootSpan) => {
+  return await traceLocalSpan(
+    { name: 'createNextInstall', parentSpan, tooling: {} },
+    async (rootSpan) => {
       const origRepoDir = path.join(__dirname, '../../')
       const isolationRoot = path.join(
         tmpDir,
@@ -480,11 +486,12 @@ async function createNextInstall({
       )
 
       if (beforeInstall !== undefined) {
-        await rootSpan
-          .traceChild('beforeInstall')
-          .traceAsyncFn(async (span) => {
+        await traceLocalSpan(
+          { name: 'beforeInstall', parentSpan: rootSpan, tooling: {} },
+          async (span) => {
             await beforeInstall(span, installDir)
-          })
+          }
+        )
       }
 
       const installString = installCommand
@@ -504,13 +511,20 @@ async function createNextInstall({
 
       if (installString !== null) {
         console.log('running install command', installString)
-        await rootSpan
-          .traceChild('run custom install')
-          .traceAsyncFn(() => runCustomInstall(installString, installDir))
+        await traceLocalSpan(
+          { name: 'run custom install', parentSpan: rootSpan, tooling: {} },
+          () => runCustomInstall(installString, installDir)
+        )
       } else {
-        await rootSpan
-          .traceChild('run generic install command', combinedDependencies)
-          .traceAsyncFn(() => installDependencies(installDir, tmpDir))
+        await traceLocalSpan(
+          {
+            name: 'run generic install command',
+            parentSpan: rootSpan,
+            attributes: combinedDependencies,
+            tooling: {},
+          },
+          () => installDependencies(installDir, tmpDir)
+        )
 
         // `@next/env` is a dependency of `next`, so it only resolves to the
         // local tarball if the overrides were applied. Every generic isolated
@@ -552,7 +566,8 @@ async function createNextInstall({
         installDir,
         pkgPaths,
       }
-    })
+    }
+  )
 }
 
 module.exports = {

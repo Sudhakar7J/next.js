@@ -3,8 +3,8 @@ import type {
   Span,
   SpanContext,
   SpanOptions,
-} from 'next/dist/compiled/@opentelemetry/api'
-import { SpanStatusCode, trace } from 'next/dist/compiled/@opentelemetry/api'
+  SpanStatusCode,
+} from '@opentelemetry/api'
 import {
   isLocalSpanRecordingEnabled,
   isLocalSpanSinkActive,
@@ -15,8 +15,11 @@ import {
   type SpanStoreRecord,
   type LocalSpanParent,
 } from './span-store'
+import type {
+  ToolingSpanOptions,
+  ToolingSpanSource,
+} from '../../../trace/trace'
 import { getOrCreateGlobalAsyncLocalStorage } from '../../app-render/async-local-storage'
-import { LocalSpan } from '../../../shared/lib/local-span'
 import type {
   RequestInsightKind,
   RequestInsightProxyStatus,
@@ -27,6 +30,9 @@ export { isLocalSpanRecordingEnabled } from './span-store'
 
 const TRACE_ID_HEX_LENGTH = 32
 const SPAN_ID_HEX_LENGTH = 16
+// The OTel status code is part of its public API. Keep recording independent of
+// loading the runtime API; only the request-context accessor below needs it.
+const SPAN_STATUS_ERROR: SpanStatusCode = 2
 
 type LocalSpanAttributes = Partial<Record<string, AttributeValue | undefined>>
 
@@ -55,6 +61,31 @@ type TraceLocalSpanOptions = Omit<
   parentSpan?: Span | null
 }
 
+type TraceExistingLocalSpanOptions = {
+  span: LocalRecordingSpan
+}
+
+type ToolingLocalSpanOptions = {
+  name: string
+  attributes?: Record<string, unknown>
+  parentSpan?: Span | null
+  tooling: ToolingSpanOptions
+}
+
+// This association contains clocks/identity only, never mutable attributes,
+// events or another end guard. Request spans do not enter this map.
+const toolingSources = new WeakMap<Span, ToolingSpanSource>()
+// Keep request-only/Edge imports independent of the tooling module. Cache its
+// lazy load: even a cached require otherwise repeats resolution on every span.
+let toolingTracing: typeof import('../../../trace/trace') | undefined
+
+/** Internal numeric identity/clock metadata, independent of public OTel IDs. */
+export function getToolingSpanSource(
+  span: Span
+): ToolingSpanSource | undefined {
+  return toolingSources.get(span)
+}
+
 let lastLocalTraceId = 0
 let lastLocalSpanId = 0
 
@@ -70,18 +101,45 @@ export function createLocalSpanId(excludedId?: string): string {
   return spanId
 }
 
-export function createLocalSpan({
-  name,
-  attributes,
-  links,
-  startTime,
-  traceId,
-  spanId,
-  parentSpanId,
-  delegateSpan,
-  publicParentSpan,
-  isolateOpenTelemetry,
-}: LocalSpanOptions): Span {
+export function createLocalSpan(
+  options: LocalSpanOptions | ToolingLocalSpanOptions
+): LocalRecordingSpan {
+  if ('tooling' in options) {
+    if (process.env.NEXT_RUNTIME !== 'edge') {
+      const { captureToolingSpanSource, normalizeToolingAttributes } =
+        (toolingTracing ??=
+          require('../../../trace/trace') as typeof import('../../../trace/trace'))
+      const parent = options.parentSpan
+        ? toolingSources.get(options.parentSpan)
+        : undefined
+      const source = captureToolingSpanSource(options.tooling, parent)
+      const span = new LocalRecordingSpan({
+        name: options.name,
+        attributes: normalizeToolingAttributes(options.attributes),
+        traceId: options.parentSpan?.spanContext().traceId ?? getLocalTraceId(),
+        spanId: createLocalSpanId(),
+        parentSpanId: options.parentSpan?.spanContext().spanId,
+        requestIdentity: {},
+        isolateOpenTelemetry: true,
+      })
+      toolingSources.set(span, source)
+      return span
+    } else {
+      throw new Error('Tooling spans are not available in the Edge runtime')
+    }
+  }
+  const {
+    name,
+    attributes,
+    links,
+    startTime,
+    traceId,
+    spanId,
+    parentSpanId,
+    delegateSpan,
+    publicParentSpan,
+    isolateOpenTelemetry,
+  } = options
   return new LocalRecordingSpan({
     name,
     attributes,
@@ -93,6 +151,7 @@ export function createLocalSpan({
     spanId: spanId ?? createLocalSpanId(),
     parentSpanId,
     requestIdentity: getCurrentRequestIdentity(),
+    recordSpans: captureLocalSpanRecorder(),
     isolateOpenTelemetry: isolateOpenTelemetry ?? false,
   })
 }
@@ -105,7 +164,9 @@ export function getLocalParentSpan(
   publicContext: SpanContext | undefined
 ): Span | undefined {
   const store = getLocalSpanAsyncStorage().getStore()
-  if (!store) return undefined
+  // Tooling has its own explicit numeric hierarchy. A request started while a
+  // coarse compiler scope is active must not adopt that tooling parent.
+  if (!store || toolingSources.has(store.span)) return undefined
   if (isOpenTelemetryIsolatedSpan(store.span)) return store.span
 
   // An SDK span opened inside this local scope is the nearer parent.
@@ -172,34 +233,97 @@ export function withLocalSpan<T>(
 }
 
 /**
- * Records an async operation without replacing or exporting through the active
- * OpenTelemetry context. Nested Next.js spans remain in the local trace.
+ * Records an operation without replacing or exporting through the active
+ * OpenTelemetry context. Requests establish local scope; tooling retains
+ * explicit parents without making unrelated request spans inherit that scope.
+ *
+ * The default remains asynchronous, including setup errors. Explicit synchronous
+ * mode ends on return/throw without awaiting a returned promise.
  */
-export async function traceLocalSpan<T>(
-  { parentSpan, ...options }: TraceLocalSpanOptions,
-  fn: () => Promise<T>
-): Promise<T> {
-  const resolvedParentSpan =
-    parentSpan === undefined ? getActiveLocalSpan() : parentSpan
-  const parentSpanContext = resolvedParentSpan?.spanContext()
-  const span = createLocalSpan({
-    ...options,
-    traceId: parentSpanContext?.traceId,
-    parentSpanId: parentSpanContext?.spanId,
-    isolateOpenTelemetry: true,
-  })
-
-  return withLocalSpan(span, async () => {
-    try {
-      return await fn()
-    } catch (err) {
-      span.recordException(err as Error)
-      span.setStatus({ code: SpanStatusCode.ERROR })
-      throw err
-    } finally {
-      span.end()
+export function traceLocalSpan<T>(
+  options: (
+    | TraceLocalSpanOptions
+    | ToolingLocalSpanOptions
+    | TraceExistingLocalSpanOptions
+  ) & {
+    synchronous: true
+  },
+  fn: (span: LocalRecordingSpan) => T
+): T
+export function traceLocalSpan<T>(
+  options: (
+    | TraceLocalSpanOptions
+    | ToolingLocalSpanOptions
+    | TraceExistingLocalSpanOptions
+  ) & {
+    synchronous?: false
+  },
+  fn: (span: LocalRecordingSpan) => T | Promise<T>
+): Promise<T>
+export function traceLocalSpan<T>(
+  options: (
+    | TraceLocalSpanOptions
+    | ToolingLocalSpanOptions
+    | TraceExistingLocalSpanOptions
+  ) & {
+    synchronous?: boolean
+  },
+  fn: (span: LocalRecordingSpan) => T | Promise<T>
+): T | Promise<T> {
+  const synchronous = options.synchronous ?? false
+  const run = () => {
+    let span: LocalRecordingSpan
+    if ('span' in options) {
+      // Some hook-delimited operations start before their callback is available.
+      // Reuse their recorder and the same callback lifecycle, not a second span.
+      span = options.span
+    } else {
+      const activeSpan =
+        options.parentSpan === undefined && !('tooling' in options)
+          ? getActiveLocalSpan()
+          : undefined
+      const resolvedParentSpan =
+        activeSpan && !toolingSources.has(activeSpan)
+          ? activeSpan
+          : options.parentSpan
+      const parentSpanContext = resolvedParentSpan?.spanContext()
+      span =
+        'tooling' in options
+          ? createLocalSpan({ ...options, parentSpan: resolvedParentSpan })
+          : createLocalSpan({
+              ...options,
+              traceId: parentSpanContext?.traceId,
+              parentSpanId: parentSpanContext?.spanId,
+              isolateOpenTelemetry: true,
+            })
     }
-  })
+    const tooling = toolingSources.has(span)
+    const fail = (err: unknown): never => {
+      if (tooling) span.setAttribute('failed', true)
+      span.recordException(err as Error)
+      span.setStatus({ code: SPAN_STATUS_ERROR })
+      throw err
+    }
+
+    const execute = () => {
+      let pending: Promise<T> | undefined
+      try {
+        const result = fn(span)
+        if (synchronous) return result
+        pending = Promise.resolve(result)
+          .catch(fail)
+          .finally(() => span.end())
+        return pending
+      } catch (err) {
+        return fail(err)
+      } finally {
+        if (!pending) span.end()
+      }
+    }
+    return tooling ? execute() : withLocalSpan(span, execute)
+  }
+
+  return synchronous ? run() : (async () => run())()
 }
 
 export type LocalSpanRecorder = {
@@ -273,17 +397,10 @@ type RequestIdentity = {
   url?: string
 }
 
-class LocalRecordingSpan
-  extends LocalSpan<
-    SpanStoreAttributes,
-    number,
-    Parameters<Span['end']>[0],
-    SpanStoreRecord
-  >
-  implements Span
-{
-  declare public name: string
+export class LocalRecordingSpan implements Span {
+  public name: string
 
+  private attributes: SpanStoreAttributes
   private events: SpanStoreEvent[]
   private readonly spanContextValue: ReturnType<Span['spanContext']>
   private readonly openTelemetryIsolated: boolean
@@ -293,6 +410,8 @@ class LocalRecordingSpan
   private links?: SpanStoreLink[]
   private readonly parentSpanId?: string
   private requestIdentity: RequestIdentity
+  private recordSpans: ReturnType<typeof captureLocalSpanRecorder> | undefined
+  private readonly startTime: number
   private statusCode: number | undefined
   private statusMessage: string | undefined
   private exception:
@@ -301,6 +420,7 @@ class LocalRecordingSpan
         message?: string
       }
     | undefined
+  private ended: boolean
 
   constructor({
     name,
@@ -313,6 +433,7 @@ class LocalRecordingSpan
     spanId,
     parentSpanId,
     requestIdentity,
+    recordSpans,
     isolateOpenTelemetry,
   }: {
     name: string
@@ -325,14 +446,11 @@ class LocalRecordingSpan
     spanId: string
     parentSpanId?: string
     requestIdentity: RequestIdentity
+    recordSpans?: ReturnType<typeof captureLocalSpanRecorder>
     isolateOpenTelemetry: boolean
   }) {
-    super(
-      name,
-      cleanSpanStoreAttributes(attributes),
-      getTimestamp(startTime),
-      captureLocalSpanRecorder()
-    )
+    this.name = name
+    this.attributes = cleanSpanStoreAttributes(attributes)
     this.events = []
     this.delegateSpan = delegateSpan
     this.openTelemetrySpan = delegateSpan ?? publicParentSpan
@@ -346,9 +464,14 @@ class LocalRecordingSpan
     this.links = getSpanStoreLinks(links)
     this.parentSpanId = parentSpanId
     this.requestIdentity = requestIdentity
+    // Request creation captures sink ownership before entering the recorder;
+    // tooling never captures or retains a request destination.
+    this.recordSpans = recordSpans
+    this.startTime = getTimestamp(startTime)
     this.statusCode = undefined
     this.statusMessage = undefined
     this.exception = undefined
+    this.ended = false
   }
 
   spanContext(): ReturnType<Span['spanContext']> {
@@ -363,23 +486,25 @@ class LocalRecordingSpan
     return (
       this.openTelemetrySpan ??
       (this.openTelemetrySpanContext
-        ? trace.wrapSpanContext(this.openTelemetrySpanContext)
+        ? (
+            require('next/dist/compiled/@opentelemetry/api') as typeof import('next/dist/compiled/@opentelemetry/api')
+          ).trace.wrapSpanContext(this.openTelemetrySpanContext)
         : undefined)
     )
   }
 
   setAttribute(key: string, value: AttributeValue): this {
-    if (this.ended) {
+    if (this.ended && !toolingSources.has(this)) {
       return this
     }
 
-    this.setLocalAttribute(key, value)
+    this.attributes[key] = value
     this.delegateSpan?.setAttribute(key, value)
     return this
   }
 
   setAttributes(attributes: Parameters<Span['setAttributes']>[0]): this {
-    if (this.ended) {
+    if (this.ended && !toolingSources.has(this)) {
       return this
     }
 
@@ -388,7 +513,7 @@ class LocalRecordingSpan
     for (const key of Object.keys(attributes)) {
       const value = attributes[key]
       if (value !== undefined) {
-        this.setLocalAttribute(key, value)
+        this.attributes[key] = value
       }
     }
     this.delegateSpan?.setAttributes(attributes)
@@ -441,14 +566,19 @@ class LocalRecordingSpan
   }
 
   end(endTime?: Parameters<Span['end']>[0]): void {
-    this.finish(endTime)
-  }
+    if (this.ended) {
+      return
+    }
 
-  protected onEnd(endTime: Parameters<Span['end']>[0]): void {
+    this.ended = true
     try {
       this.delegateSpan?.end(endTime)
     } finally {
-      this.record(endTime)
+      try {
+        this.record(endTime)
+      } finally {
+        this.releaseReferences()
+      }
     }
   }
 
@@ -474,49 +604,63 @@ class LocalRecordingSpan
   }
 
   private record(endTime: Parameters<Span['end']>[0]): void {
+    const source = toolingSources.get(this)
+    if (source && process.env.NEXT_RUNTIME !== 'edge') {
+      const { completeToolingSpan } = (toolingTracing ??=
+        require('../../../trace/trace') as typeof import('../../../trace/trace'))
+      completeToolingSpan(source, this.name, this.attributes, endTime)
+      return
+    }
     const recordAttributes =
       Object.keys(this.attributes).length > 0 ? this.attributes : undefined
 
-    this.emit({
-      timestamp: getTimestamp(),
-      name: this.name,
-      startTime: this.startTime,
-      durationMs: Math.max(0, getTimestamp(endTime) - this.startTime),
-      status: this.statusCode === SpanStatusCode.ERROR ? 'error' : 'ok',
-      traceId: this.spanContextValue.traceId,
-      spanId: this.spanContextValue.spanId,
-      parentSpanId: this.parentSpanId,
-      requestId: this.requestIdentity.requestId,
-      requestInsightKind: this.requestIdentity.requestInsightKind,
-      requestInsightSource: this.requestIdentity.requestInsightSource,
-      requestInsightProxyStatus: this.requestIdentity.requestInsightProxyStatus,
-      htmlRequestId: this.requestIdentity.htmlRequestId,
-      route:
-        getStringAttribute(recordAttributes, 'next.route') ??
-        getStringAttribute(recordAttributes, 'http.route') ??
-        this.requestIdentity.route,
-      url:
-        getStringAttribute(recordAttributes, 'http.url') ??
-        this.requestIdentity.url,
-      attributes: recordAttributes,
-      links: this.links,
-      events: this.events.length > 0 ? this.events : undefined,
-      error: this.getRecordError(),
-    })
+    this.recordSpans?.([
+      {
+        timestamp: getTimestamp(),
+        name: this.name,
+        startTime: this.startTime,
+        durationMs: Math.max(0, getTimestamp(endTime) - this.startTime),
+        status: this.statusCode === SPAN_STATUS_ERROR ? 'error' : 'ok',
+        traceId: this.spanContextValue.traceId,
+        spanId: this.spanContextValue.spanId,
+        parentSpanId: this.parentSpanId,
+        requestId: this.requestIdentity.requestId,
+        requestInsightKind: this.requestIdentity.requestInsightKind,
+        requestInsightSource: this.requestIdentity.requestInsightSource,
+        requestInsightProxyStatus:
+          this.requestIdentity.requestInsightProxyStatus,
+        htmlRequestId: this.requestIdentity.htmlRequestId,
+        route:
+          getStringAttribute(recordAttributes, 'next.route') ??
+          getStringAttribute(recordAttributes, 'http.route') ??
+          this.requestIdentity.route,
+        url:
+          getStringAttribute(recordAttributes, 'http.url') ??
+          this.requestIdentity.url,
+        attributes: recordAttributes,
+        links: this.links,
+        events: this.events.length > 0 ? this.events : undefined,
+        error: this.getRecordError(),
+      },
+    ])
   }
 
-  protected releaseReferences(): void {
+  private releaseReferences(): void {
     // AsyncLocalStorage can keep an ended span reachable when work spawned
     // inside the span outlives it. Keep only the immutable span context and
     // primitive timing/identity fields needed by the Span API after end.
-    this.name = ''
-    this.attributes = {}
+    // Legacy saved tooling events retain the normalized tag object and permit
+    // late attribute writes. Request spans release it and ignore later writes.
+    if (!toolingSources.has(this)) {
+      this.name = ''
+      this.attributes = {}
+    }
     this.events = []
     this.delegateSpan = undefined
     this.openTelemetrySpan = undefined
     this.links = undefined
     this.requestIdentity = {}
-    this.subscriber = undefined
+    this.recordSpans = undefined
     this.statusMessage = undefined
     this.exception = undefined
   }
@@ -531,7 +675,7 @@ class LocalRecordingSpan
       return this.exception
     }
 
-    if (this.statusCode === SpanStatusCode.ERROR && this.statusMessage) {
+    if (this.statusCode === SPAN_STATUS_ERROR && this.statusMessage) {
       return {
         message: this.statusMessage,
       }

@@ -1,6 +1,6 @@
 // Node-only local capture and clock/worker adapter. API/SDK work belongs to the
 // deferred consumer; local recording remains independent of app sampling.
-import type { TraceEvent } from './types'
+import type { TraceEvent, ToolingSpanSelection } from './types'
 import {
   configureReporting,
   startReporting,
@@ -65,11 +65,20 @@ export function freshWorkerEvents(events: TraceEvent[]) {
   return fresh
 }
 
-export function replayWorkerEvents(events: TraceEvent[]) {
-  replayCompleted(events, (event) => ({
-    start: epochTime(BigInt(event.timestamp) * NS_PER_US),
-    end: epochTime(
-      (BigInt(event.timestamp) + BigInt(event.duration)) * NS_PER_US
-    ),
-  }))
+export function replayWorkerEvents(
+  events: TraceEvent[],
+  selections: readonly ToolingSpanSelection[] = []
+) {
+  const parents = new Map(selections.map(({ id, parentId }) => [id, parentId]))
+  const selected = events.filter((event) => parents.has(event.id))
+  replayCompleted(
+    selected,
+    (event) => ({
+      start: epochTime(BigInt(event.timestamp) * NS_PER_US),
+      end: epochTime(
+        (BigInt(event.timestamp) + BigInt(event.duration)) * NS_PER_US
+      ),
+    }),
+    (event) => parents.get(event.id)
+  )
 }

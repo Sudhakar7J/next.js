@@ -1,30 +1,36 @@
+import { traceLocalSpan } from '../../../../server/lib/trace/local-span-recorder'
 import path from 'path'
 import { stringifyRequest } from '../../stringify-request'
 
 const loaderApi = () => {}
 
 loaderApi.pitch = function loader(this: any, request: any): any {
-  const loaderSpan = this.currentTraceSpan.traceChild('next-style-loader')
+  return traceLocalSpan(
+    {
+      name: 'next-style-loader',
+      parentSpan: this.currentTraceSpan,
+      tooling: {},
+      synchronous: true,
+    },
+    () => {
+      const options = this.getOptions()
 
-  return loaderSpan.traceFn(() => {
-    const options = this.getOptions()
+      const insert =
+        typeof options.insert === 'undefined'
+          ? '"head"'
+          : typeof options.insert === 'string'
+            ? JSON.stringify(options.insert)
+            : options.insert.toString()
+      const injectType = options.injectType || 'styleTag'
+      const esModule =
+        typeof options.esModule !== 'undefined' ? options.esModule : false
 
-    const insert =
-      typeof options.insert === 'undefined'
-        ? '"head"'
-        : typeof options.insert === 'string'
-          ? JSON.stringify(options.insert)
-          : options.insert.toString()
-    const injectType = options.injectType || 'styleTag'
-    const esModule =
-      typeof options.esModule !== 'undefined' ? options.esModule : false
+      delete options.esModule
 
-    delete options.esModule
-
-    switch (injectType) {
-      case 'linkTag': {
-        const hmrCode = this.hot
-          ? `
+      switch (injectType) {
+        case 'linkTag': {
+          const hmrCode = this.hot
+            ? `
 if (module.hot) {
   module.hot.accept(
     ${stringifyRequest(this, `!!${request}`)},
@@ -45,23 +51,23 @@ if (module.hot) {
     update();
   });
 }`
-          : ''
+            : ''
 
-        return `${
-          esModule
-            ? `import api from ${stringifyRequest(
-                this,
-                `!${path.join(__dirname, 'runtime/injectStylesIntoLinkTag.js')}`
-              )};
+          return `${
+            esModule
+              ? `import api from ${stringifyRequest(
+                  this,
+                  `!${path.join(__dirname, 'runtime/injectStylesIntoLinkTag.js')}`
+                )};
             import content from ${stringifyRequest(this, `!!${request}`)};`
-            : `var api = require(${stringifyRequest(
-                this,
-                `!${path.join(__dirname, 'runtime/injectStylesIntoLinkTag.js')}`
-              )});
+              : `var api = require(${stringifyRequest(
+                  this,
+                  `!${path.join(__dirname, 'runtime/injectStylesIntoLinkTag.js')}`
+                )});
             var content = require(${stringifyRequest(this, `!!${request}`)});
 
             content = content.__esModule ? content.default : content;`
-        }
+          }
 
 var options = ${JSON.stringify(options)};
 
@@ -72,14 +78,14 @@ var update = api(content, options);
 ${hmrCode}
 
 ${esModule ? 'export default {}' : ''}`
-      }
+        }
 
-      case 'lazyStyleTag':
-      case 'lazySingletonStyleTag': {
-        const isSingleton = injectType === 'lazySingletonStyleTag'
+        case 'lazyStyleTag':
+        case 'lazySingletonStyleTag': {
+          const isSingleton = injectType === 'lazySingletonStyleTag'
 
-        const hmrCode = this.hot
-          ? `
+          const hmrCode = this.hot
+            ? `
 if (module.hot) {
   if (!content.locals || module.hot.invalidate) {
     
@@ -132,25 +138,25 @@ if (module.hot) {
     }
   });
 }`
-          : ''
+            : ''
 
-        return `${
-          esModule
-            ? `import api from ${stringifyRequest(
-                this,
-                `!${path.join(
-                  __dirname,
-                  'runtime/injectStylesIntoStyleTag.js'
-                )}`
-              )};
+          return `${
+            esModule
+              ? `import api from ${stringifyRequest(
+                  this,
+                  `!${path.join(
+                    __dirname,
+                    'runtime/injectStylesIntoStyleTag.js'
+                  )}`
+                )};
             import content from ${stringifyRequest(this, `!!${request}`)};`
-            : `var api = require(${stringifyRequest(
-                this,
-                `!${path.join(
-                  __dirname,
-                  'runtime/injectStylesIntoStyleTag.js'
-                )}`
-              )});
+              : `var api = require(${stringifyRequest(
+                  this,
+                  `!${path.join(
+                    __dirname,
+                    'runtime/injectStylesIntoStyleTag.js'
+                  )}`
+                )});
             var content = require(${stringifyRequest(this, `!!${request}`)});
 
             content = content.__esModule ? content.default : content;
@@ -158,7 +164,7 @@ if (module.hot) {
             if (typeof content === 'string') {
               content = [[module.id, content, '']];
             }`
-        }
+          }
 
 var refs = 0;
 var update;
@@ -187,15 +193,15 @@ exported.unuse = function() {
 ${hmrCode}
 
 ${esModule ? 'export default' : 'module.exports ='} exported;`
-      }
+        }
 
-      case 'styleTag':
-      case 'singletonStyleTag':
-      default: {
-        const isSingleton = injectType === 'singletonStyleTag'
+        case 'styleTag':
+        case 'singletonStyleTag':
+        default: {
+          const isSingleton = injectType === 'singletonStyleTag'
 
-        const hmrCode = this.hot
-          ? `
+          const hmrCode = this.hot
+            ? `
 if (module.hot) {
   if (!content.locals || module.hot.invalidate) {
     var isEqualLocals = ${
@@ -244,25 +250,25 @@ if (module.hot) {
     update();
   });
 }`
-          : ''
+            : ''
 
-        return `${
-          esModule
-            ? `import api from ${stringifyRequest(
-                this,
-                `!${path.join(
-                  __dirname,
-                  'runtime/injectStylesIntoStyleTag.js'
-                )}`
-              )};
+          return `${
+            esModule
+              ? `import api from ${stringifyRequest(
+                  this,
+                  `!${path.join(
+                    __dirname,
+                    'runtime/injectStylesIntoStyleTag.js'
+                  )}`
+                )};
             import content from ${stringifyRequest(this, `!!${request}`)};`
-            : `var api = require(${stringifyRequest(
-                this,
-                `!${path.join(
-                  __dirname,
-                  'runtime/injectStylesIntoStyleTag.js'
-                )}`
-              )});
+              : `var api = require(${stringifyRequest(
+                  this,
+                  `!${path.join(
+                    __dirname,
+                    'runtime/injectStylesIntoStyleTag.js'
+                  )}`
+                )});
             var content = require(${stringifyRequest(this, `!!${request}`)});
 
             content = content.__esModule ? content.default : content;
@@ -270,7 +276,7 @@ if (module.hot) {
             if (typeof content === 'string') {
               content = [[module.id, content, '']];
             }`
-        }
+          }
 
 var options = ${JSON.stringify(options)};
 
@@ -282,9 +288,10 @@ var update = api(content, options);
 ${hmrCode}
 
 ${esModule ? 'export default' : 'module.exports ='} content.locals || {};`
+        }
       }
     }
-  })
+  )
 }
 
 module.exports = loaderApi

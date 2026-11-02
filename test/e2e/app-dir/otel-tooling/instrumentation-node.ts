@@ -36,6 +36,7 @@ export async function register() {
         pid: process.pid,
         spans: spans.map((span) => ({
           name: span.name,
+          instrumentationScope: span.instrumentationScope.name,
           traceId: span.spanContext().traceId,
           spanId: span.spanContext().spanId,
           parentSpanId: span.parentSpanContext?.spanId,

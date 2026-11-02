@@ -1,5 +1,18 @@
 import { getOrCreateGlobalAsyncLocalStorage } from '../../app-render/async-local-storage'
-import { emitLocalSpans } from '../../../shared/lib/local-span'
+import type { TraceEvent } from '../../../trace/types'
+import type { Span } from '@opentelemetry/api'
+
+// Lazy for request-only/Edge users, cached for high-volume tooling imports.
+let toolingTracing: typeof import('../../../trace/trace') | undefined
+let toolingRecorder: typeof import('./local-span-recorder') | undefined
+
+/** Completed native/manual observations use nanoseconds since Unix epoch. */
+export type ToolingSpanObservation = {
+  name: string
+  startTime?: bigint
+  endTime?: bigint
+  attributes?: Record<string, unknown>
+}
 import type {
   RequestInsightKind,
   RequestInsightProxyStatus,
@@ -103,10 +116,67 @@ export function recordSpan(record: Omit<SpanStoreRecord, 'timestamp'>): void {
   recordSpans([spanRecord])
 }
 
-export function recordSpans(spans: readonly SpanStoreRecord[]): void {
-  // Completed observations share delivery with live local spans, but retain
-  // request-only enablement and scoped sink ownership at this boundary.
-  emitLocalSpans(spans, captureLocalSpanRecorder())
+export function recordSpans(
+  ...args:
+    | [spans: readonly SpanStoreRecord[]]
+    | [spans: readonly TraceEvent[], source: 'tooling']
+    | [
+        spans: readonly ToolingSpanObservation[],
+        source: 'tooling',
+        parentSpan: Span | undefined,
+      ]
+): void {
+  if (args.length === 3) {
+    if (process.env.NEXT_RUNTIME !== 'edge') {
+      const {
+        captureToolingSpanSource,
+        completeToolingSpan,
+        normalizeToolingAttributes,
+        toolingSpanTime,
+      } = (toolingTracing ??=
+        require('../../../trace/trace') as typeof import('../../../trace/trace'))
+      const { getToolingSpanSource } = (toolingRecorder ??=
+        require('./local-span-recorder') as typeof import('./local-span-recorder'))
+      const parent = args[2] ? getToolingSpanSource(args[2]) : undefined
+      const nsPerMs = BigInt(1_000_000)
+      for (const observation of args[0]) {
+        // Native events arrive after completion. Preserve their original wall
+        // start and map both endpoints to the local monotonic clock together.
+        const correction =
+          process.hrtime.bigint() - BigInt(Date.now()) * nsPerMs
+        const source = captureToolingSpanSource(
+          {
+            startTime: observation.startTime
+              ? observation.startTime + correction
+              : undefined,
+            wallStartTimeMs: observation.startTime
+              ? Number(observation.startTime / nsPerMs)
+              : undefined,
+          },
+          parent
+        )
+        completeToolingSpan(
+          source,
+          observation.name,
+          normalizeToolingAttributes(observation.attributes),
+          observation.endTime
+            ? toolingSpanTime(observation.endTime + correction)
+            : undefined
+        )
+      }
+    }
+  } else if (args.length === 2) {
+    // Tooling observations go straight to files in builds as well as dev, never
+    // into the request sink/history or an application SDK provider.
+    if (process.env.NEXT_RUNTIME !== 'edge') {
+      const { reportToolingSpans } = (toolingTracing ??=
+        require('../../../trace/trace') as typeof import('../../../trace/trace'))
+      reportToolingSpans(args[0])
+    }
+  } else {
+    // Request observations retain creation-time sink ownership and dev gates.
+    captureLocalSpanRecorder()(args[0])
+  }
 }
 
 export function captureLocalSpanRecorder(): (

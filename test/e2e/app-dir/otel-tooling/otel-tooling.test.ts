@@ -9,6 +9,7 @@ import {
 
 type ExportedSpan = {
   name: string
+  instrumentationScope: string
   traceId: string
   spanId: string
   parentSpanId?: string
@@ -33,6 +34,26 @@ type Message = {
     toolingId: unknown
   }[]
 }
+const coarseNames = new Set([
+  'next-build',
+  'run-webpack',
+  'run-webpack-compiler',
+  'run-turbopack',
+  'run-typescript',
+  'static-check',
+  'static-generation',
+  'collect-build-traces',
+  'start-dev-server',
+  'setup-dev-bundler',
+  'hot-reloader',
+  'webpack-compilation',
+  'compile-path',
+  ...['server', 'edge-server', 'client'].flatMap((compiler) => [
+    `worker-main-${compiler}`,
+    `webpack-invalidated-${compiler}`,
+  ]),
+])
+
 const milliseconds = ([seconds, ns]: [number, number]) =>
   seconds * 1000 + ns / 1e6
 
@@ -104,6 +125,8 @@ describe('experimental tooling OTel', () => {
       expectTraceEventContract(local)
       const rootName = isNextDev ? 'start-dev-server' : 'next-build'
       expect(local.some((event) => event.name === rootName)).toBe(true)
+      // Fine observations remain in the full local hierarchy, never the SDK lane.
+      expect(local.some((event) => !coarseNames.has(event.name))).toBe(true)
       const flushes = messages.filter((message) => message.kind === 'flush')
       const registrations = messages.filter(
         (message) => message.kind === 'register'
@@ -201,8 +224,40 @@ describe('experimental tooling OTel', () => {
         const parent = unfinishedById.get(span.parentSpanId!)!
         expect(local.some((event) => event.id === parent.toolingId)).toBe(false)
       }
+      const localById = new Map(local.map((event) => [event.id, event]))
       for (const span of tooling) {
         expect(span.traceId).toBe(root.traceId)
+        expect(span.instrumentationScope).toBe('next.js')
+        expect(coarseNames.has(span.name)).toBe(true)
+        const event = localById.get(
+          span.attributes['next.tooling.id'] as number
+        )!
+        expect(event).toBeDefined()
+        expect(event.name).toBe(span.name)
+        expect(span.attributes['next.tooling.parent_id']).toBe(event.parentId)
+        expect(
+          Math.abs(milliseconds(span.startTime) - event.startTime!)
+        ).toBeLessThan(5)
+        expect(
+          Math.abs(
+            milliseconds(span.endTime) -
+              milliseconds(span.startTime) -
+              event.duration / 1000
+          )
+        ).toBeLessThan(1)
+        const parent = span.parentSpanId && spansById.get(span.parentSpanId)
+        if (parent) {
+          // Skip omitted fine ancestors in the SDK tree, not in local files.
+          let parentId = event.parentId
+          const seen = new Set<number>()
+          while (parentId !== undefined && !seen.has(parentId)) {
+            seen.add(parentId)
+            const localParent = localById.get(parentId)
+            if (!localParent || coarseNames.has(localParent.name)) break
+            parentId = localParent.parentId
+          }
+          expect(parent.attributes['next.tooling.id']).toBe(parentId)
+        }
       }
       if (!isNextDev && process.env.IS_WEBPACK_TEST) {
         const workers = tooling.filter((span) =>
@@ -212,6 +267,53 @@ describe('experimental tooling OTel', () => {
         for (const worker of workers)
           expect(worker.parentSpanId).toBe(root.spanId)
       }
+    })
+  })
+
+  // A webpack config hook has no equivalent execution path in Turbopack.
+  // @force-gate start && webpack
+  describe('compiler setup failure', () => {
+    const { next } = nextTestSetup({
+      files: __dirname,
+      skipStart: true,
+      dependencies,
+      env: { NEXT_EXPERIMENTAL_OTEL_TOOLING: '1' },
+    })
+
+    it('completes the compiler span when config setup throws', async () => {
+      await next.patchFile('next.config.ts', (source) =>
+        source.replace(
+          "distDir: 'otel-output'",
+          "distDir: 'otel-output', experimental: { webpackBuildWorker: false }, webpack() { throw new Error('tooling-webpack-setup-failure') }"
+        )
+      )
+      const { exitCode, cliOutput } = await next.build()
+      expect(exitCode).not.toBe(0)
+      expect(cliOutput).toContain('tooling-webpack-setup-failure')
+      const events = parseTraceFile(
+        join(next.testDir, 'otel-output', 'trace')
+      ).events
+      expectTraceEventContract(events)
+      const root = events.find((event) => event.name === 'next-build')!
+      expect(root.tags).toMatchObject({ failed: true })
+      const compilers = events.filter(
+        (event) => event.name === 'run-webpack-compiler'
+      )
+      expect(compilers).toHaveLength(1)
+      const compiler = compilers[0]
+      expect(compiler.parentId).toBe(root.id)
+      expect(compiler.tags).toMatchObject({ failed: true })
+      const config = events.find(
+        (event) => event.name === 'generate-webpack-config'
+      )!
+      expect(config.parentId).toBe(compiler.id)
+      expect(config.timestamp).toBeGreaterThanOrEqual(compiler.timestamp)
+      expect(config.timestamp + config.duration).toBeLessThanOrEqual(
+        compiler.timestamp + compiler.duration
+      )
+      expect(compiler.timestamp + compiler.duration).toBeLessThanOrEqual(
+        root.timestamp + root.duration
+      )
     })
   })
 

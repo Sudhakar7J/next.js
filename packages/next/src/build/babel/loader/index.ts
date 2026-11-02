@@ -1,4 +1,5 @@
-import type { Span } from '../../../trace'
+import type { Span } from '@opentelemetry/api'
+import { traceLocalSpan } from '../../../server/lib/trace/local-span-recorder'
 import transform from './transform'
 import type { NextJsLoaderContext } from './types'
 import type { SourceMap } from './util'
@@ -18,19 +19,28 @@ async function nextBabelLoader(
   }
 
   const target = ctx.target
-  const loaderOptions: any = parentTrace
-    .traceChild('get-options')
-    // @ts-ignore TODO: remove ignore once webpack 5 types are used
-    .traceFn(() => ctx.getOptions())
+  const loaderOptions: any = traceLocalSpan(
+    {
+      name: 'get-options',
+      parentSpan: parentTrace,
+      tooling: {},
+      synchronous: true,
+    },
+    () => ctx.getOptions()
+  )
 
   if (loaderOptions.exclude && loaderOptions.exclude(filename)) {
     return [inputSource, inputSourceMap]
   }
 
-  const loaderSpanInner = parentTrace.traceChild('next-babel-turbo-transform')
   const { code: transformedSource, map: outputSourceMap } =
-    await loaderSpanInner.traceAsyncFn(
-      async () =>
+    await traceLocalSpan(
+      {
+        name: 'next-babel-turbo-transform',
+        parentSpan: parentTrace,
+        tooling: {},
+      },
+      async (loaderSpanInner) =>
         await transform(
           ctx,
           inputSource,
@@ -53,22 +63,25 @@ function nextBabelLoaderOuter(
 ) {
   const callback = this.async()
 
-  const loaderSpan = this.currentTraceSpan.traceChild('next-babel-turbo-loader')
-  loaderSpan
-    .traceAsyncFn(() =>
+  traceLocalSpan(
+    {
+      name: 'next-babel-turbo-loader',
+      parentSpan: this.currentTraceSpan,
+      tooling: {},
+    },
+    (loaderSpan) =>
       nextBabelLoader(this, loaderSpan, inputSource, inputSourceMap)
-    )
-    .then(
-      ([transformedSource, outputSourceMap]) =>
-        callback?.(
-          /* err */ null,
-          transformedSource,
-          outputSourceMap ?? inputSourceMap
-        ),
-      (err) => {
-        callback?.(err)
-      }
-    )
+  ).then(
+    ([transformedSource, outputSourceMap]) =>
+      callback?.(
+        /* err */ null,
+        transformedSource,
+        outputSourceMap ?? inputSourceMap
+      ),
+    (err) => {
+      callback?.(err)
+    }
+  )
 }
 
 // check this type matches `webpack.LoaderDefinitionFunction`, but be careful

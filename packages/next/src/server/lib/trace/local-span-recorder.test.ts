@@ -4,9 +4,14 @@
 
 import { runInNewContext } from 'node:vm'
 import { setFlagsFromString } from 'node:v8'
-import { SpanStatusCode, trace } from 'next/dist/compiled/@opentelemetry/api'
+import {
+  context,
+  SpanStatusCode,
+  trace,
+} from 'next/dist/compiled/@opentelemetry/api'
 import {
   createLocalSpan,
+  getActiveLocalSpan,
   getLocalParentSpan,
   getOpenTelemetrySpan,
   traceLocalSpan,
@@ -83,6 +88,67 @@ describe('local recording span', () => {
         },
       }),
     ])
+  })
+
+  it('retains completed request data while releasing references and ignoring late mutations', () => {
+    const span = createLocalSpan({
+      name: 'request',
+      attributes: { initial: true },
+    })
+    span.addEvent('event', { value: 'captured' })
+    span.end()
+    span.updateName('late name').setAttribute('late', true)
+    expect(spanRecords[0]).toMatchObject({
+      name: 'request',
+      attributes: { initial: true },
+      events: [{ name: 'event', attributes: { value: 'captured' } }],
+    })
+    expect((span as any).name).toBe('')
+    expect((span as any).recordSpans).toBeUndefined()
+    expect((span as any).events).toEqual([])
+  })
+
+  it('emits locally and releases references even when a request delegate throws', () => {
+    const error = new Error('delegate end failed')
+    const delegate = {
+      spanContext: () => ({ traceId: 'trace', spanId: 'span', traceFlags: 0 }),
+      end: jest.fn(() => {
+        throw error
+      }),
+    }
+    const span = createLocalSpan({
+      name: 'request',
+      delegateSpan: delegate as any,
+    })
+    const endTime: [number, number] = [1700000000, 123456789]
+    expect(() => span.end(endTime)).toThrow(error)
+    span.end()
+    expect(delegate.end).toHaveBeenCalledTimes(1)
+    expect(delegate.end).toHaveBeenCalledWith(endTime)
+    expect(spanRecords).toEqual([expect.objectContaining({ name: 'request' })])
+    expect((span as any).recordSpans).toBeUndefined()
+    expect((span as any).delegateSpan).toBeUndefined()
+  })
+
+  it('isolates a reentrant throwing scoped sink after completion and releases the request payload', () => {
+    const error = new Error('scoped sink failed')
+    let span: ReturnType<typeof createLocalSpan>
+    const sink = jest.fn(() => {
+      span.end()
+      throw error
+    })
+    runWithLocalSpanSink(sink, () => {
+      span = createLocalSpan({
+        name: 'request',
+        attributes: { payload: 'released' },
+      })
+    })
+    expect(() => span.end()).not.toThrow()
+    expect(span!.isRecording()).toBe(false)
+    expect((span! as any).attributes).toEqual({})
+    expect((span! as any).recordSpans).toBeUndefined()
+    expect(() => span.end()).not.toThrow()
+    expect(sink).toHaveBeenCalledTimes(1)
   })
 
   it('keeps browser debug IDs separate from server-owned storage IDs', () => {
@@ -251,6 +317,81 @@ describe('local recording span', () => {
         },
       }),
     ])
+  })
+
+  it('returns synchronously and scopes the callback span without changing public context', () => {
+    const publicSpan = trace.getSpanContext(context.active())
+    const result = traceLocalSpan(
+      { name: 'sync parent', synchronous: true },
+      (parent) => {
+        expect(getActiveLocalSpan()).toBe(parent)
+        expect(trace.getSpanContext(context.active())).toBe(publicSpan)
+        parent.setAttribute('value', 42)
+        return traceLocalSpan(
+          { name: 'sync child', synchronous: true },
+          (child) => {
+            expect(getActiveLocalSpan()).toBe(child)
+            return 42
+          }
+        )
+      }
+    )
+
+    expect(result).toBe(42)
+    expect(getActiveLocalSpan()).toBeUndefined()
+    expect(spanRecords).toHaveLength(2)
+    const [child, parent] = spanRecords
+    expect(child.parentSpanId).toBe(parent.spanId)
+    expect(child.traceId).toBe(parent.traceId)
+    expect(parent.attributes).toEqual({ value: 42 })
+  })
+
+  it('preserves synchronous error identity and completes only once', () => {
+    const error = new Error('sync failure')
+    expect(() =>
+      traceLocalSpan({ name: 'sync failure', synchronous: true }, (span) => {
+        span.setAttribute('before', true)
+        throw error
+      })
+    ).toThrow(error)
+    expect(spanRecords).toHaveLength(1)
+    expect(spanRecords[0]).toMatchObject({
+      status: 'error',
+      error: { message: error.message },
+      attributes: { before: true },
+    })
+    expect(getActiveLocalSpan()).toBeUndefined()
+  })
+
+  it('does not await a promise returned in explicit synchronous mode', async () => {
+    let resolve!: (value: number) => void
+    const pending = new Promise<number>((done) => {
+      resolve = done
+    })
+    const result = traceLocalSpan(
+      { name: 'sync promise', synchronous: true },
+      () => pending
+    )
+    expect(result).toBe(pending)
+    expect(spanRecords).toHaveLength(1)
+    resolve(42)
+    await expect(result).resolves.toBe(42)
+    expect(spanRecords).toHaveLength(1)
+  })
+
+  it('keeps the default async return and rejection semantics for plain callbacks', async () => {
+    const result = traceLocalSpan({ name: 'async default' }, () => 42)
+    expect(result).toBeInstanceOf(Promise)
+    await expect(result).resolves.toBe(42)
+    const error = new Error('plain callback failure')
+    let rejected!: Promise<never>
+    expect(() => {
+      rejected = traceLocalSpan({ name: 'async failure' }, () => {
+        throw error
+      })
+    }).not.toThrow()
+    await expect(rejected).rejects.toBe(error)
+    expect(spanRecords).toHaveLength(2)
   })
 
   it('can start a detached trace inside an active local span', async () => {

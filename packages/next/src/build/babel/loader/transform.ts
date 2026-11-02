@@ -13,7 +13,11 @@ import PluginPass from 'next/dist/compiled/babel/core-lib-plugin-pass'
 
 import getConfig from './get-config'
 import { consumeIterator } from './util'
-import type { Span } from '../../../trace'
+import type { Span } from '@opentelemetry/api'
+import {
+  createLocalSpan,
+  traceLocalSpan,
+} from '../../../server/lib/trace/local-span-recorder'
 import type { NextJsLoaderContext } from './types'
 import type { SourceMap } from './util'
 
@@ -59,9 +63,15 @@ function transformAstPass(file: any, pluginPairs: any[], parentSpan: Span) {
     file.opts.wrapPluginVisitorMethod
   )
 
-  parentSpan
-    .traceChild('babel-turbo-traverse')
-    .traceFn(() => traverse(file.ast, visitor, file.scope))
+  traceLocalSpan(
+    {
+      name: 'babel-turbo-traverse',
+      parentSpan,
+      tooling: {},
+      synchronous: true,
+    },
+    () => traverse(file.ast, visitor, file.scope)
+  )
 
   invokePluginPost(file, passPairs)
 }
@@ -81,7 +91,11 @@ export default async function transform(
   target: string,
   parentSpan: Span
 ): Promise<GeneratorResult> {
-  const getConfigSpan = parentSpan.traceChild('babel-turbo-get-config')
+  const getConfigSpan = createLocalSpan({
+    name: 'babel-turbo-get-config',
+    parentSpan,
+    tooling: {},
+  })
 
   const babelConfig = await getConfig(ctx, {
     source,
@@ -93,21 +107,33 @@ export default async function transform(
   if (!babelConfig) {
     return { code: source, map: inputSourceMap ?? null }
   }
-  getConfigSpan.stop()
+  getConfigSpan.end()
 
-  const normalizeSpan = parentSpan.traceChild('babel-turbo-normalize-file')
+  const normalizeSpan = createLocalSpan({
+    name: 'babel-turbo-normalize-file',
+    parentSpan,
+    tooling: {},
+  })
   const file = consumeIterator(
     normalizeFile(babelConfig.passes, normalizeOpts(babelConfig), source)
   )
-  normalizeSpan.stop()
+  normalizeSpan.end()
 
-  const transformSpan = parentSpan.traceChild('babel-turbo-transform')
+  const transformSpan = createLocalSpan({
+    name: 'babel-turbo-transform',
+    parentSpan,
+    tooling: {},
+  })
   transformAst(file, babelConfig, transformSpan)
-  transformSpan.stop()
+  transformSpan.end()
 
-  const generateSpan = parentSpan.traceChild('babel-turbo-generate')
+  const generateSpan = createLocalSpan({
+    name: 'babel-turbo-generate',
+    parentSpan,
+    tooling: {},
+  })
   const { code, map } = generate(file.ast, file.opts.generatorOpts, file.code)
-  generateSpan.stop()
+  generateSpan.end()
 
   return { code, map }
 }

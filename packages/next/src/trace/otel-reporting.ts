@@ -30,9 +30,9 @@ export type ReportingRecord = {
 
 type State = 'unregistered' | 'ready' | 'finalizing' | 'closed'
 let state: State = 'unregistered'
-// Resolve once, lazily inside the consumer; repeated module resolution is
-// significant on per-module workloads even though Node caches the module.
-let api: typeof import('@opentelemetry/api') | undefined
+// Resolve the shared SDK backend once inside the consumer. Local-only producers
+// never import it; application API/SDK ownership is the same as the Next tracer.
+let backend: typeof import('../server/lib/trace/otel-api') | undefined
 let generation = 0
 let suppressed = false
 let warned = false
@@ -139,13 +139,16 @@ function canEmit(record: ReportingRecord) {
   )
 }
 
-// This is the only bridge-owned API/SDK entry point. Loading the API, sampling,
-// processors, context construction and attribute normalization all happen here,
-// never in a producer or instrumentation-registration stack.
+// This is the only bridge-owned API/SDK entry point. Deferred coarse replay
+// shares the Next tracer's application-owned backend; fine local producers do
+// not reach this consumer or pay its sampling/processor costs.
 function emit(record: ReportingRecord) {
   try {
-    const { ROOT_CONTEXT, SpanStatusCode, trace } = (api ??=
-      require('next/dist/compiled/@opentelemetry/api') as typeof import('next/dist/compiled/@opentelemetry/api') as unknown as typeof import('@opentelemetry/api'))
+    const {
+      api: { ROOT_CONTEXT, SpanStatusCode, trace },
+      getTracerInstance,
+    } = (backend ??=
+      require('../server/lib/trace/otel-api') as typeof import('../server/lib/trace/otel-api'))
     const tags =
       record.end === undefined ? undefined : attributes(record.encoded)
     const alreadyStarted = !!record.span
@@ -158,7 +161,7 @@ function emit(record: ReportingRecord) {
       const context = parent
         ? trace.setSpanContext(ROOT_CONTEXT, parent)
         : ROOT_CONTEXT
-      const span = trace.getTracer('next.js.tooling').startSpan(
+      const span = getTracerInstance().startSpan(
         record.name,
         {
           startTime: time(record.start),
@@ -343,7 +346,9 @@ export function configureReporting(
 
 export function replayCompleted(
   events: TraceEvent[],
-  timing: (event: TraceEvent) => { start: bigint; end: bigint }
+  timing: (event: TraceEvent) => { start: bigint; end: bigint },
+  parentId: (event: TraceEvent) => number | undefined = (event) =>
+    event.parentId
 ) {
   if (suppressed || state === 'closed') return
   if (!defaultParent) {
@@ -351,20 +356,22 @@ export function replayCompleted(
     return
   }
   const batch = new Map<number, ReportingRecord>()
+  const parents = new Map<number, number | undefined>()
   for (const event of events) {
     const { start, end } = timing(event)
     const record = startReporting(event.id, event.parentId, event.name, start)
     if (record) {
       endReporting(record, end, event.tags ?? {})
       batch.set(event.id, record)
+      parents.set(event.id, parentId(event))
     }
   }
   // Completion order is not topology order. Resolve the entire admitted batch
   // before any deferred SDK work. A dropped parent falls back to the real root.
   for (const record of batch.values()) {
     record.parent =
-      batch.get(record.parentId!) ??
-      records.get(record.parentId!) ??
+      batch.get(parents.get(record.id)!) ??
+      records.get(parents.get(record.id)!) ??
       defaultParent
     if (!record.parent) {
       warnLoss()
