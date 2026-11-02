@@ -13,6 +13,7 @@ import { getProperError } from '../../lib/is-error'
 import { isReactLargeShellError } from './react-large-shell-error'
 import { isInstantValidationError } from './instant-validation/instant-validation-error'
 import { isNextBrowserBailoutError } from '../../shared/lib/lazy-dynamic/react-browser-bailout'
+import { getServerReact } from '../runtime-reacts.external'
 
 declare global {
   var __next_log_error__: undefined | ((err: unknown) => void)
@@ -25,6 +26,15 @@ type SSRErrorHandler = (
 ) => string | undefined
 
 export type DigestedError = Error & { digest: string; environmentName?: string }
+
+function appendOwnerStack(error: Error): void {
+  const ownerStack = getServerReact()?.captureOwnerStack?.()
+
+  if (ownerStack && !error.stack?.includes(ownerStack)) {
+    error.stack =
+      (error.stack || `${error.name}: ${error.message}`) + ownerStack
+  }
+}
 
 /**
  * Returns a digest for well-known Next.js errors, otherwise `undefined`. If a
@@ -120,6 +130,7 @@ export function createReactServerErrorHandler(
 
     // Format server errors in development to add more helpful error messages
     if (shouldFormatError) {
+      appendOwnerStack(err)
       formatServerError(err)
     }
 
