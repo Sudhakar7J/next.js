@@ -1,5 +1,16 @@
 import { reporter } from './report'
 import type { SpanId, TraceEvent, TraceState } from './types'
+import type { ReportingRecord } from './otel-reporting'
+
+let otel: typeof import('./otel') | undefined
+if (
+  process.env.NEXT_RUNTIME !== 'edge' &&
+  process.env.NEXT_EXPERIMENTAL_OTEL_TOOLING === '1'
+) {
+  otel = require('./otel') as typeof import('./otel')
+} else {
+  otel = undefined
+}
 
 const NUM_OF_MICROSEC_IN_NANOSEC = BigInt('1000')
 const NUM_OF_MILLISEC_IN_NANOSEC = BigInt('1000000')
@@ -29,13 +40,14 @@ interface Attributes {
 
 export class Span {
   private name: string
+  private reporting?: ReportingRecord
   private id: SpanId
   private parentId?: SpanId
   private attrs: { [key: string]: unknown }
   private status: SpanStatus
   private now: number
 
-  // Number of nanoseconds since epoch.
+  // Monotonic nanoseconds from process.hrtime.bigint().
   private _start: bigint
 
   constructor({
@@ -44,6 +56,7 @@ export class Span {
     attrs,
     startTime,
     wallStartTimeMs,
+    reportingParent,
   }: {
     name: string
     parentId?: SpanId
@@ -52,13 +65,14 @@ export class Span {
     // Defaults to the construction time.
     wallStartTimeMs?: number
     attrs?: Attributes
+    reportingParent?: ReportingRecord
   }) {
-    this.name = name
+    this.id = getId()
     this.parentId = parentId ?? defaultParentSpanId
+    this.name = name
     this.attrs = attrs ? { ...attrs } : {}
 
     this.status = SpanStatus.Started
-    this.id = getId()
     this._start = startTime || process.hrtime.bigint()
     // hrtime cannot be used to reconstruct tracing span's actual start time
     // since it does not have relation to clock time:
@@ -66,6 +80,14 @@ export class Span {
     // https://nodejs.org/api/process.html#processhrtimetime
     // Capturing current datetime as additional metadata for external reconstruction.
     this.now = wallStartTimeMs ?? Date.now()
+    this.reporting = otel?.startSpan({
+      name,
+      id: this.id,
+      parentId: this.parentId,
+      attrs: this.attrs,
+      startTime: this._start,
+      reportingParent,
+    })
   }
 
   // Durations are reported as microseconds. This gives 1000x the precision
@@ -94,16 +116,25 @@ export class Span {
       tags: this.attrs,
       startTime: this.now,
     }
-    if (duration > RECORD_SPAN_THRESHOLD_MS * 1000) {
-      reporter.report(traceEvent)
-      if (shouldSaveTraceEvents) {
-        savedTraceEvents.push(traceEvent)
+    try {
+      if (duration > RECORD_SPAN_THRESHOLD_MS * 1000) {
+        reporter.report(traceEvent)
+        if (shouldSaveTraceEvents) {
+          savedTraceEvents.push(traceEvent)
+        }
       }
+    } finally {
+      otel?.stopSpan(this.reporting, end)
     }
   }
 
   traceChild(name: string, attrs?: Attributes) {
-    return new Span({ name, parentId: this.id, attrs })
+    return new Span({
+      name,
+      parentId: this.id,
+      attrs,
+      reportingParent: this.reporting,
+    })
   }
 
   manualTraceChild(
@@ -121,6 +152,7 @@ export class Span {
       name,
       parentId: this.id,
       attrs,
+      reportingParent: this.reporting,
       startTime: startTime ? startTime + correction : process.hrtime.bigint(),
       // The span is constructed when the event is recorded, which may be long
       // after the work started (e.g. compilation events forwarded from
@@ -138,13 +170,14 @@ export class Span {
 
   setAttribute(key: string, value: unknown) {
     this.attrs[key] = value
+    otel?.updateReporting(this.reporting, key, value)
   }
 
   traceFn<T>(fn: (span: Span) => T): T {
     try {
       return fn(this)
     } catch (e) {
-      this.attrs['failed'] = true
+      this.setAttribute('failed', true)
       throw e
     } finally {
       this.stop()
@@ -155,7 +188,7 @@ export class Span {
     try {
       return await fn(this)
     } catch (e) {
-      this.attrs['failed'] = true
+      this.setAttribute('failed', true)
       throw e
     } finally {
       this.stop()
@@ -186,11 +219,23 @@ export const exportTraceState = (): TraceState => ({
   defaultParentSpanId,
   lastId: count,
   shouldSaveTraceEvents,
+  ...(otel
+    ? {
+        otelClockOffset: otel.getClockOffset(),
+      }
+    : {}),
 })
 export const initializeTraceState = (state: TraceState) => {
   count = state.lastId
   defaultParentSpanId = state.defaultParentSpanId
   shouldSaveTraceEvents = state.shouldSaveTraceEvents
+  if (otel) {
+    otel.configureState(
+      defaultParentSpanId,
+      !!shouldSaveTraceEvents,
+      state.otelClockOffset
+    )
+  }
 }
 
 export function getTraceEvents(): TraceEvent[] {
@@ -198,6 +243,7 @@ export function getTraceEvents(): TraceEvent[] {
 }
 
 export function recordTraceEvents(events: TraceEvent[]) {
+  if (otel) events = otel.freshWorkerEvents(events)
   for (const traceEvent of events) {
     reporter.report(traceEvent)
     if (traceEvent.id > count) {
@@ -207,6 +253,7 @@ export function recordTraceEvents(events: TraceEvent[]) {
   if (shouldSaveTraceEvents) {
     savedTraceEvents.push(...events)
   }
+  otel?.replayWorkerEvents(events)
 }
 
 export const clearTraceEvents = () => (savedTraceEvents = [])
