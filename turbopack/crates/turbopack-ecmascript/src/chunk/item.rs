@@ -14,7 +14,7 @@ use turbopack_core::{
         AsyncModuleInfo, ChunkItem, ChunkItemWithAsyncModuleInfo, ChunkType, ChunkingContext,
         ChunkingContextExt, ModuleId, SourceMapSourceType,
     },
-    code_builder::{CodeBuilder, CodeCells},
+    code_builder::{Code, CodeBuilder, CodeCells},
     ident::AssetIdent,
     issue::{IssueExt, IssueSeverity, StyledString, code_gen::CodeGenerationIssue},
     module::Module,
@@ -126,7 +126,7 @@ impl EcmascriptChunkItemContent {
 }
 
 impl EcmascriptChunkItemContent {
-    async fn module_factory(&self) -> Result<ResolvedVc<CodeCells>> {
+    async fn module_factory(&self) -> Result<Code> {
         let mut code = CodeBuilder::default();
         for additional_id in self.additional_ids.iter() {
             writeln!(code, "{}, ", StringifyJs(&additional_id))?;
@@ -205,7 +205,7 @@ impl EcmascriptChunkItemContent {
 
         code += "})";
 
-        Ok(code.build().resolved_code_cells())
+        Ok(code.build())
     }
 }
 
@@ -270,7 +270,7 @@ pub trait EcmascriptChunkItem: ChunkItem + OutputAssetsReference {
     ) -> Result<Vc<EcmascriptChunkItemContent>>;
 }
 
-#[turbo_tasks::value]
+#[turbo_tasks::value(shared)]
 pub struct EcmascriptChunkItemCode {
     pub code: ResolvedVc<CodeCells>,
     pub strict: bool,
@@ -302,6 +302,25 @@ async fn module_factory_with_code_generation_issue(
     chunk_item: Vc<Box<dyn EcmascriptChunkItem>>,
     async_module_info: Option<Vc<AsyncModuleInfo>>,
 ) -> Result<Vc<EcmascriptChunkItemCode>> {
+    let (code, strict) = module_factory_code(chunk_item, async_module_info).await?;
+    Ok(EcmascriptChunkItemCode {
+        code: code.resolved_code_cells(),
+        strict,
+    }
+    .cell())
+}
+
+/// Generates the module factory for `chunk_item` (in the current task, without storing it in
+/// cells) and whether it must run in strict mode. If generating the factory fails, emits a
+/// [`CodeGenerationIssue`] and returns a factory throwing the error.
+///
+/// [`EcmascriptChunkItemExt::code`] stores the result as cells of its own task. A task that only
+/// needs a transformed factory (e.g. a minified one) can call this directly, so that only the
+/// transformed factory is stored.
+pub(crate) async fn module_factory_code(
+    chunk_item: Vc<Box<dyn EcmascriptChunkItem>>,
+    async_module_info: Option<Vc<AsyncModuleInfo>>,
+) -> Result<(Code, bool)> {
     async fn get_content(
         chunk_item: Vc<Box<dyn EcmascriptChunkItem>>,
         async_module_info: Option<Vc<AsyncModuleInfo>>,
@@ -344,10 +363,10 @@ async fn module_factory_with_code_generation_issue(
             code += "(() => {{\n\n";
             writeln!(code, "throw new Error({error});", error = js_error_message)?;
             code += "\n}})";
-            code.build().resolved_code_cells()
+            code.build()
         }
     };
-    Ok(EcmascriptChunkItemCode { code, strict }.cell())
+    Ok((code, strict))
 }
 
 /// Generic chunk item that wraps any EcmascriptChunkPlaceable module.

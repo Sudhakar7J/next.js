@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bincode::{Decode, Encode};
 use rustc_hash::FxHashMap;
 use smallvec::{SmallVec, smallvec};
 use turbo_rcstr::RcStr;
@@ -7,14 +8,15 @@ use turbo_tasks::{
 };
 use turbo_tasks_fs::{OptionByteRange, rope::Rope};
 use turbopack_core::{
-    chunk::{ChunkItem, ChunkItemExt, MangleType, MinifyType, ModuleId},
+    chunk::{AsyncModuleInfo, ChunkItem, ChunkItemExt, MangleType, MinifyType, ModuleId},
     code_builder::CodeCells,
 };
 
 use crate::{
     chunk::{
-        EcmascriptChunkItemBatchGroup, EcmascriptChunkItemExt,
-        EcmascriptChunkItemOrBatchWithAsyncInfo, EcmascriptChunkItemWithAsyncInfo,
+        EcmascriptChunkItem, EcmascriptChunkItemBatchGroup, EcmascriptChunkItemCode,
+        EcmascriptChunkItemExt, EcmascriptChunkItemOrBatchWithAsyncInfo,
+        EcmascriptChunkItemWithAsyncInfo, item::module_factory_code,
     },
     minify::minify_chunk_item,
 };
@@ -24,18 +26,16 @@ async fn code_module_id_and_path(
     minify: MinifyType,
     source_maps: bool,
 ) -> Result<CodeModuleIdAndPath> {
-    let factory = item
-        .chunk_item
-        .code(item.async_info.map(|info| *info))
-        .await?;
+    let async_info = item.async_info.map(|info| *info);
     // `MinifyType::NoMinify` here means the chunk will be minified as a whole later (or not at
     // all); only the per-item mode asks for the factory to be minified now. A strict factory keeps
     // its `"use strict"` directive either way; the chunk drops it where it places the factory in a
     // strict context (see `write_module_factories`).
-    let cells = match minify {
+    let factory = match minify {
         MinifyType::Minify { mangle } => {
             minified_module_factory(
-                *factory.code,
+                Vc::upcast_non_strict(*item.chunk_item),
+                async_info,
                 source_maps,
                 MinifyType::Minify {
                     // `OptimalSize` orders mangled names by the character frequency of the code
@@ -45,11 +45,11 @@ async fn code_module_id_and_path(
                     mangle: mangle.map(|_| MangleType::Deterministic),
                 },
             )
-            .to_resolved()
             .await?
         }
-        MinifyType::NoMinify => factory.code,
+        MinifyType::NoMinify => item.chunk_item.code(async_info).await?,
     };
+    let cells = factory.code;
     let cells_value = cells.await?;
     Ok(CodeModuleIdAndPath {
         id: item.chunk_item.id().await?,
@@ -61,27 +61,37 @@ async fn code_module_id_and_path(
     })
 }
 
-/// A module factory minified on its own, stored as its own persisted cells so that chunks can
-/// reference the minified bytes instead of persisting a copy (and so that a cache restore doesn't
-/// re-minify unchanged factories).
+/// A chunk item's module factory, generated and minified on its own in this one task, and stored
+/// as its own persisted cells so that chunks can reference the minified bytes instead of
+/// persisting a copy (and so that a cache restore doesn't re-minify unchanged factories).
+///
+/// Only the minified factory is stored: the unminified one is an intermediate of this task.
+/// Changing the minification options therefore generates the factories again, which is fine:
+/// they rarely change.
 #[turbo_tasks::function]
 async fn minified_module_factory(
-    code: ResolvedVc<CodeCells>,
+    chunk_item: Vc<Box<dyn EcmascriptChunkItem>>,
+    async_module_info: Option<Vc<AsyncModuleInfo>>,
     source_maps: bool,
     minify: MinifyType,
-) -> Result<Vc<CodeCells>> {
+) -> Result<Vc<EcmascriptChunkItemCode>> {
     let MinifyType::Minify { mangle } = minify else {
         anyhow::bail!("minified_module_factory called without minification");
     };
-    let code = code.to_code().await?;
+    let (code, strict) = module_factory_code(chunk_item, async_module_info).await?;
     let minified = minify_chunk_item(&code, source_maps, mangle)?;
-    Ok(*minified.resolved_code_cells())
+    Ok(EcmascriptChunkItemCode {
+        code: minified.resolved_code_cells(),
+        strict,
+    }
+    .cell())
 }
 
 /// A chunk item's module factory, as referenced by a chunk. Holds only references to the
 /// factory's cells, not its bytes, so it stays equal when only the factory's bytes change (and a
-/// chunk's composition, which depends on it, isn't recomputed).
-#[derive(Clone, PartialEq, Eq, ValueDebugFormat, NonLocalValue)]
+/// chunk's composition, which depends on it, isn't recomputed). Being references, ids and paths
+/// only, it is cheap to persist.
+#[derive(Clone, PartialEq, Eq, ValueDebugFormat, NonLocalValue, Encode, Decode)]
 pub struct CodeModuleIdAndPath {
     pub id: ModuleId,
     /// The factory's persisted cells.
@@ -95,10 +105,14 @@ pub struct CodeModuleIdAndPath {
     pub strict: bool,
 }
 
-#[turbo_tasks::value(transparent, serialization = "skip")]
-pub struct CodeModuleIdsAndPaths(SmallVec<[CodeModuleIdAndPath; 1]>);
+/// Persisted: it only holds references, ids and paths (see [`CodeModuleIdAndPath`]).
+#[turbo_tasks::value(transparent)]
+pub struct CodeModuleIdsAndPaths(
+    #[bincode(with = "turbo_bincode::smallvec")] SmallVec<[CodeModuleIdAndPath; 1]>,
+);
 
-#[turbo_tasks::value(transparent, serialization = "skip")]
+/// Persisted: the values only hold references, ids and paths (see [`CodeModuleIdAndPath`]).
+#[turbo_tasks::value(transparent)]
 pub struct BatchGroupCodeModuleIdsAndPaths(
     FxHashMap<EcmascriptChunkItemOrBatchWithAsyncInfo, ReadRef<CodeModuleIdsAndPaths>>,
 );
