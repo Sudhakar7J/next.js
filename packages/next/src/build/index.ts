@@ -1152,11 +1152,16 @@ export default async function build(
   process.once('exit', () => flushTurbopackWarnings())
 
   try {
-    const nextBuildSpan = trace('next-build', undefined, {
-      buildMode: experimentalBuildMode,
-      version: process.env.__NEXT_VERSION as string,
-      ...enabledFeatures,
-    })
+    const nextBuildSpan = trace(
+      'next-build',
+      undefined,
+      {
+        buildMode: experimentalBuildMode,
+        version: process.env.__NEXT_VERSION as string,
+        ...enabledFeatures,
+      },
+      true
+    )
 
     NextBuildContext.nextBuildSpan = nextBuildSpan
     NextBuildContext.dir = dir

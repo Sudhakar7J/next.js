@@ -689,15 +689,22 @@ if (process.env.NEXT_PRIVATE_WORKER && process.send) {
         )
       }
 
-      startServerSpan = trace('start-dev-server', undefined, {
-        cpus: String(os.availableParallelism()),
-        platform: os.platform(),
-        'memory.freeMem': String(os.freemem()),
-        'memory.totalMem': String(os.totalmem()),
-        'memory.heapSizeLimit': String(v8.getHeapStatistics().heap_size_limit),
-        ...enabledFeaturesFromParent,
-        ...rageRestartAttrsFromParent,
-      })
+      startServerSpan = trace(
+        'start-dev-server',
+        undefined,
+        {
+          cpus: String(os.availableParallelism()),
+          platform: os.platform(),
+          'memory.freeMem': String(os.freemem()),
+          'memory.totalMem': String(os.totalmem()),
+          'memory.heapSizeLimit': String(
+            v8.getHeapStatistics().heap_size_limit
+          ),
+          ...enabledFeaturesFromParent,
+          ...rageRestartAttrsFromParent,
+        },
+        true
+      )
 
       initializeTraceState({
         ...exportTraceState(),
