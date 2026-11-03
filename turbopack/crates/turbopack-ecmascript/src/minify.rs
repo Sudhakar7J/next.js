@@ -3,7 +3,6 @@ use std::{ops::Range, sync::Arc};
 use anyhow::{Context, Result, bail};
 use bytes_str::BytesStr;
 use swc_core::{
-    atoms::atom,
     base::try_with_handler,
     common::{
         BytePos, DUMMY_SP, FileName, FilePathMapping, GLOBALS, LineCol, Mark,
@@ -20,7 +19,7 @@ use swc_core::{
             Emitter, Node,
             text_writer::{self, JsWriter, WriteJs},
         },
-        minifier::option::{CompressOptions, ExtraOptions, MangleOptions, MinifyOptions},
+        minifier::option::{ExtraOptions, MinifyOptions},
         parser::{Parser, StringInput, Syntax, lexer::Lexer},
         transforms::base::{
             fixer::paren_remover,
@@ -31,16 +30,13 @@ use swc_core::{
 };
 use tracing::instrument;
 use turbo_tasks_fs::rope::Rope;
-use turbopack_core::{
-    chunk::MangleType,
-    code_builder::{Code, CodeBuilder},
-};
+use turbopack_core::code_builder::{Code, CodeBuilder};
 
 use crate::parse::{IdentCollector, generate_js_source_map};
 
 /// Minify a whole program, typically a finished chunk.
 #[instrument(level = "info", name = "minify ecmascript code", skip_all)]
-pub fn minify(code: Code, source_maps: bool, mangle: Option<MangleType>) -> Result<Code> {
+pub fn minify(code: Code, source_maps: bool, swc_minify_options: &MinifyOptions) -> Result<Code> {
     // Pass None for the debug ID so we don't needlessly compute it for the pre-minified content, it
     // will be added by the Code object returned from this function
     let original_map = source_maps.then(|| code.generate_source_map_ref(None));
@@ -50,7 +46,7 @@ pub fn minify(code: Code, source_maps: bool, mangle: Option<MangleType>) -> Resu
         source_code,
         original_map,
         generate_debug_id,
-        mangle,
+        swc_minify_options,
         MinifyTarget::Program,
     )
 }
@@ -67,7 +63,7 @@ pub fn minify(code: Code, source_maps: bool, mangle: Option<MangleType>) -> Resu
 pub fn minify_chunk_item(
     code: &Code,
     source_maps: bool,
-    mangle: Option<MangleType>,
+    swc_minify_options: &MinifyOptions,
 ) -> Result<Code> {
     let original_map = source_maps.then(|| code.generate_source_map_ref(None));
     let generate_debug_id = code.should_generate_debug_id();
@@ -76,7 +72,7 @@ pub fn minify_chunk_item(
         source_code,
         original_map,
         generate_debug_id,
-        mangle,
+        swc_minify_options,
         MinifyTarget::ChunkItem,
     )
 }
@@ -110,7 +106,7 @@ fn minify_source(
     source_code: BytesStr,
     original_map: Option<Rope>,
     generate_debug_id: bool,
-    mangle: Option<MangleType>,
+    swc_minify_options: &MinifyOptions,
     target: MinifyTarget,
 ) -> Result<Code> {
     let cm = Arc::new(SwcSourceMap::new(FilePathMapping::empty()));
@@ -164,7 +160,7 @@ fn minify_source(
                 Default::default()
             };
 
-            let mut program = optimize(program, &cm, &comments, mangle);
+            let mut program = optimize(program, &cm, &comments, swc_minify_options);
 
             let output = match target {
                 MinifyTarget::Program => {
@@ -284,7 +280,7 @@ fn optimize(
     program: Program,
     cm: &Arc<SwcSourceMap>,
     comments: &SingleThreadedComments,
-    mangle: Option<MangleType>,
+    swc_minify_options: &MinifyOptions,
 ) -> Program {
     let unresolved_mark = Mark::new();
     let top_level_mark = Mark::new();
@@ -302,31 +298,7 @@ fn optimize(
         cm.clone(),
         Some(comments),
         None,
-        &MinifyOptions {
-            compress: Some(CompressOptions {
-                // Only run 2 passes, this is a tradeoff between performance and
-                // compression size. Default is 3 passes.
-                passes: 2,
-                keep_classnames: mangle.is_none(),
-                keep_fnames: mangle.is_none(),
-                ..Default::default()
-            }),
-            mangle: mangle.map(|mangle| {
-                let reserved = vec![atom!("AbortSignal")];
-                match mangle {
-                    MangleType::OptimalSize => MangleOptions {
-                        reserved,
-                        ..Default::default()
-                    },
-                    MangleType::Deterministic => MangleOptions {
-                        reserved,
-                        disable_char_freq: true,
-                        ..Default::default()
-                    },
-                }
-            }),
-            ..Default::default()
-        },
+        swc_minify_options,
         &ExtraOptions {
             top_level_mark,
             unresolved_mark,
@@ -334,7 +306,7 @@ fn optimize(
         },
     );
 
-    if mangle.is_none() {
+    if swc_minify_options.mangle.is_none() {
         program.mutate(hygiene_with_config(hygiene::Config {
             top_level_mark,
             ..Default::default()
@@ -494,12 +466,26 @@ fn print(
 #[cfg(test)]
 mod tests {
     use swc_sourcemap::{DecodedMap, SourceMapBuilder};
-    use turbopack_core::{
-        chunk::MangleType,
-        code_builder::{CodeBuilder, STRICT_DIRECTIVE},
-    };
+    use turbopack_core::code_builder::{CodeBuilder, STRICT_DIRECTIVE};
 
     use super::*;
+    use crate::emit_options::EcmascriptEmitOptions;
+
+    fn optimal_size() -> MinifyOptions {
+        EcmascriptEmitOptions::builder()
+            .preset_minify_optimal_size()
+            .build()
+            .swc_minify_options
+            .unwrap()
+    }
+
+    fn deterministic() -> MinifyOptions {
+        EcmascriptEmitOptions::builder()
+            .preset_minify_deterministic()
+            .build()
+            .swc_minify_options
+            .unwrap()
+    }
 
     fn code(src: &str) -> Code {
         let mut builder = CodeBuilder::new(false, false);
@@ -507,14 +493,14 @@ mod tests {
         builder.build()
     }
 
-    fn minify_item(src: &str, mangle: Option<MangleType>) -> String {
-        let out = minify_chunk_item(&code(src), false, mangle).unwrap();
+    fn minify_item(src: &str, options: &MinifyOptions) -> String {
+        let out = minify_chunk_item(&code(src), false, options).unwrap();
         out.source_code().to_str().unwrap().into_owned()
     }
 
     /// The minified code and the text of its recorded strict directive.
     fn minify_strict(src: &str) -> (Code, String, Option<String>) {
-        let out = minify_chunk_item(&code(src), false, Some(MangleType::Deterministic)).unwrap();
+        let out = minify_chunk_item(&code(src), false, &deterministic()).unwrap();
         let text = out.source_code().to_str().unwrap().into_owned();
         let directive = out.strict_directive().map(|range| {
             // The directive starts the factory body.
@@ -543,7 +529,7 @@ mod tests {
                 const value = 1 + 2;
                 __turbopack_context__.v(value);
             }"#,
-            Some(MangleType::OptimalSize),
+            &optimal_size(),
         );
         assert!(!out.contains(CHUNK_ITEM_SENTINEL), "{out}");
         assert!(out.starts_with("function("), "{out}");
@@ -558,7 +544,7 @@ mod tests {
                 .into(),
             None::<Rope>,
         );
-        let out = minify_chunk_item(&builder.build(), true, Some(MangleType::OptimalSize)).unwrap();
+        let out = minify_chunk_item(&builder.build(), true, &optimal_size()).unwrap();
         assert!(out.has_source_map());
         assert!(
             !out.source_code()
@@ -654,8 +640,7 @@ mod tests {
         map.into_sourcemap().to_writer(&mut map_bytes).unwrap();
         let mut builder = CodeBuilder::new(true, false);
         builder.push_source(&src.to_string().into(), Some(Rope::from(map_bytes)));
-        let factory =
-            minify_chunk_item(&builder.build(), true, Some(MangleType::Deterministic)).unwrap();
+        let factory = minify_chunk_item(&builder.build(), true, &deterministic()).unwrap();
         assert!(factory.strict_directive().is_some());
 
         let compose = |without_directive: bool| {
@@ -707,7 +692,7 @@ mod tests {
         // Merged (scope hoisted) modules prefix their factory with their additional ids.
         let out = minify_item(
             "85296, \"other id\", (__turbopack_context__) => {\n__turbopack_context__.v(1 + 2);\n}",
-            Some(MangleType::OptimalSize),
+            &optimal_size(),
         );
         assert!(out.starts_with("85296,\"other id\","), "{out}");
         assert!(!out.contains(CHUNK_ITEM_SENTINEL), "{out}");
@@ -718,7 +703,7 @@ mod tests {
         let out = minify(
             code("globalThis.TURBOPACK = [1, function () { return 2 }];"),
             false,
-            Some(MangleType::OptimalSize),
+            &optimal_size(),
         )
         .unwrap();
         let out = out.source_code().to_str().unwrap().into_owned();
