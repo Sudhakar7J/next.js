@@ -591,7 +591,7 @@ async function exportPage(
 ): Promise<ExportPageResult | undefined> {
   createLocalSpan({
     name: 'export-page',
-    tooling: { parentId: input.parentSpanId },
+    parent: input.parentSpanId,
     attributes: { path: input.exportPath.path },
   })
 
@@ -607,7 +607,7 @@ async function exportPage(
 
   const exportPageSpan = createLocalSpan({
     name: 'export-page-worker',
-    tooling: { parentId: input.parentSpanId },
+    parent: input.parentSpanId,
   })
 
   const start = Date.now()

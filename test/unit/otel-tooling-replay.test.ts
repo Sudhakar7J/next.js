@@ -10,6 +10,7 @@ describe('tooling OTel replay', () => {
   // framework's internal ambient declarations for the reporter's dependencies.
   let tracing: typeof import('next/dist/trace/trace')
   let recorder: typeof import('next/dist/server/lib/trace/local-span-recorder')
+  let requestRecorder: typeof import('next/dist/server/lib/trace/request-span-recorder')
   let nextTracer: ReturnType<
     typeof import('next/dist/server/lib/trace/tracer').getTracer
   >
@@ -46,6 +47,7 @@ describe('tooling OTel replay', () => {
     reporting = require('../../packages/next/src/trace/otel-reporting')
     tracing = require('../../packages/next/src/trace/trace')
     recorder = require('../../packages/next/src/server/lib/trace/local-span-recorder')
+    requestRecorder = require('../../packages/next/src/server/lib/trace/request-span-recorder')
     nextTracer =
       require('../../packages/next/src/server/lib/trace/tracer').getTracer()
     types = require('../../packages/next/src/server/lib/trace/constants')
@@ -94,8 +96,7 @@ describe('tooling OTel replay', () => {
         : types.ToolingSpan.runWebpackCompiler,
       {
         spanName: `operation-${id}`,
-        parentSpan: reportingParent,
-        source: { parentId },
+        parent: reportingParent ?? parentId,
       }
     )
   }
@@ -103,6 +104,45 @@ describe('tooling OTel replay', () => {
   function stopSpan(state: import('@opentelemetry/api').Span, end?: bigint) {
     state.end(end === undefined ? undefined : tracing.toolingSpanTime(end))
   }
+
+  it('keeps zero and detached coarse parents without a second source parent option', async () => {
+    installApplicationProvider()
+    tracing.initializeTraceState({
+      lastId: 0,
+      defaultParentSpanId: 77,
+      shouldSaveTraceEvents: false,
+    })
+    nextTracer.trace(types.ToolingSpan.nextBuild, (root) => {
+      nextTracer.trace(
+        types.ToolingSpan.runWebpackCompiler,
+        { parent: 0 },
+        () => {}
+      )
+      nextTracer.trace(
+        types.ToolingSpan.runWebpackCompiler,
+        { parent: null },
+        () => {}
+      )
+      nextTracer.trace(
+        types.ToolingSpan.runWebpackCompiler,
+        { parent: root },
+        () => {}
+      )
+    })
+    expect(local.map(({ id, parentId }) => ({ id, parentId }))).toEqual([
+      { id: 2, parentId: 0 },
+      { id: 3, parentId: undefined },
+      { id: 4, parentId: 1 },
+      { id: 1, parentId: 77 },
+    ])
+    backend.enableReporting()
+    await backend.flushReporting()
+    expect(exported).toHaveLength(4)
+    expect(
+      exported.find((entry) => entry.attributes['next.tooling.id'] === 2)
+        ?.attributes['next.tooling.parent_id']
+    ).toBe(0)
+  })
 
   it('preserves original local timing, normalized tags, errors and idempotent end', async () => {
     installApplicationProvider()
@@ -112,7 +152,8 @@ describe('tooling OTel replay', () => {
     )
     const state = nextTracer.startSpan(types.ToolingSpan.runWebpackCompiler, {
       spanName: 'backdated',
-      source: { startTime: start, wallStartTimeMs: 1_700_000_000_000 },
+      monotonicStartTime: start,
+      wallStartTimeMs: 1_700_000_000_000,
       attributes: tags,
     })
     state.setAttributes(
@@ -265,11 +306,10 @@ describe('tooling OTel replay', () => {
     })
     const fine = recorder.createLocalSpan({
       name: 'worker-fine-parent',
-      parentSpan: worker,
-      tooling: {},
+      parent: worker,
     })
     nextTracer
-      .startSpan(types.ToolingSpan.runWebpackCompiler, { parentSpan: fine })
+      .startSpan(types.ToolingSpan.runWebpackCompiler, { parent: fine })
       .end()
     fine.end()
     worker.end()
@@ -416,7 +456,7 @@ describe('tooling OTel replay', () => {
       try {
         if (mode === 'dev') {
           process.env.__NEXT_DEV_SERVER = '1'
-          recorder.registerLocalSpanRecorder()
+          requestRecorder.registerLocalSpanRecorder()
           store.setSpanRecorderForTest((record) => requestRecords.push(record))
         } else {
           delete process.env.__NEXT_DEV_SERVER
@@ -496,20 +536,21 @@ describe('tooling OTel replay', () => {
           const result = nextTracer.trace(
             types.ToolingSpan.runWebpackCompiler,
             {
-              source: { startTime: start, wallStartTimeMs: 1_700_000_000_000 },
+              monotonicStartTime: start,
+              wallStartTimeMs: 1_700_000_000_000,
             },
             async (span) => {
               compiler = span
               expect(nextTracer.getActiveScopeSpan()).toBe(span)
               expect(api.context.active().getValue(key)).toBeUndefined()
               await recorder.traceLocalSpan(
-                { name: 'prepare-config', parentSpan: span, tooling: {} },
+                { name: 'prepare-config', parent: span },
                 () => 1
               )
               // The same coarse source owns children on both sides of setup.
               expect(nextTracer.getActiveScopeSpan()).toBe(span)
               await recorder.traceLocalSpan(
-                { name: 'compile-module', parentSpan: span, tooling: {} },
+                { name: 'compile-module', parent: span },
                 () => 2
               )
               return 'compiled'
@@ -612,18 +653,17 @@ describe('tooling OTel replay', () => {
           expect(api.context.active().getValue(key)).toBeUndefined()
           const fine = recorder.createLocalSpan({
             name: 'fine-transform',
-            parentSpan: root,
-            tooling: {},
+            parent: root,
           })
           expect(
             nextTracer.trace(
               types.ToolingSpan.runWebpackCompiler,
-              { parentSpan: fine },
+              { parent: fine },
               () => 7
             )
           ).toBe(7)
           expect(recorder.getLocalParentSpan(undefined)).toBeUndefined()
-          recorder.traceLocalSpan(
+          requestRecorder.traceRequestSpan(
             { name: 'request-local', synchronous: true },
             (request) => {
               expect(recorder.getToolingSpanSource(request)).toBeUndefined()
@@ -694,7 +734,7 @@ describe('tooling OTel replay', () => {
     for (let index = 0; index < 1000; index++) {
       expect(
         recorder.traceLocalSpan(
-          { name: 'fine-transform', tooling: {}, synchronous: true },
+          { name: 'fine-transform', synchronous: true },
           () => index
         )
       ).toBe(index)
@@ -739,7 +779,7 @@ describe('tooling OTel replay', () => {
     backend.enableReporting()
     const child = nextTracer.startSpan(types.ToolingSpan.runWebpackCompiler, {
       spanName: 'child',
-      parentSpan: root,
+      parent: root,
       attributes: { initial: true },
     })
     child.setAttribute('final', 'value')
@@ -790,7 +830,7 @@ describe('tooling OTel replay', () => {
     const nested = { value: 'original' }
     const child = nextTracer.startSpan(types.ToolingSpan.runWebpackCompiler, {
       spanName: 'completed',
-      parentSpan: root,
+      parent: root,
       attributes: { nested },
     })
     child.setAttribute('final', true)
@@ -818,7 +858,7 @@ describe('tooling OTel replay', () => {
     const start = process.hrtime.bigint()
     const state = nextTracer.startSpan(types.ToolingSpan.runWebpackCompiler, {
       spanName: 'loss',
-      source: { startTime: start },
+      monotonicStartTime: start,
     })
     backend.enableReporting()
     await retry(() =>
@@ -869,7 +909,6 @@ describe('tooling OTel replay', () => {
     const state = recorder.createLocalSpan({
       name: 'normalized',
       attributes: { payload: cyclic, omitted: null, keep: true },
-      tooling: {},
     })
     state.setAttributes(
       tracing.normalizeToolingAttributes({ later: cyclic, unset: undefined })
@@ -889,7 +928,7 @@ describe('tooling OTel replay', () => {
     const root = span(1)
     const parent = nextTracer.startSpan(types.ToolingSpan.runWebpackCompiler, {
       spanName: 'parent',
-      parentSpan: root,
+      parent: root,
     })
     // Inspect the source's adapter handle, not SDK private state.
     const handle = recorder.getToolingSpanSource(parent)!.reporting!
@@ -904,7 +943,7 @@ describe('tooling OTel replay', () => {
     nextTracer
       .startSpan(types.ToolingSpan.runWebpackCompiler, {
         spanName: 'late',
-        parentSpan: parent,
+        parent: parent,
       })
       .end()
     root.end()
@@ -1098,7 +1137,7 @@ describe('tooling OTel replay', () => {
       types.ToolingSpan.runWebpackCompiler,
       {
         spanName: 'terminal',
-        parentSpan: root,
+        parent: root,
       }
     )
     terminal.end()
@@ -1190,7 +1229,7 @@ describe('tooling OTel replay', () => {
     nextTracer
       .startSpan(types.ToolingSpan.runWebpackCompiler, {
         spanName: 'waiting',
-        parentSpan: root,
+        parent: root,
       })
       .end()
     const hook = jest.fn(() => new Promise<void>(() => {}))

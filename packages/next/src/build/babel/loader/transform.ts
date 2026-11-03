@@ -66,8 +66,7 @@ function transformAstPass(file: any, pluginPairs: any[], parentSpan: Span) {
   traceLocalSpan(
     {
       name: 'babel-turbo-traverse',
-      parentSpan,
-      tooling: {},
+      parent: parentSpan,
       synchronous: true,
     },
     () => traverse(file.ast, visitor, file.scope)
@@ -93,8 +92,7 @@ export default async function transform(
 ): Promise<GeneratorResult> {
   const getConfigSpan = createLocalSpan({
     name: 'babel-turbo-get-config',
-    parentSpan,
-    tooling: {},
+    parent: parentSpan,
   })
 
   const babelConfig = await getConfig(ctx, {
@@ -111,8 +109,7 @@ export default async function transform(
 
   const normalizeSpan = createLocalSpan({
     name: 'babel-turbo-normalize-file',
-    parentSpan,
-    tooling: {},
+    parent: parentSpan,
   })
   const file = consumeIterator(
     normalizeFile(babelConfig.passes, normalizeOpts(babelConfig), source)
@@ -121,16 +118,14 @@ export default async function transform(
 
   const transformSpan = createLocalSpan({
     name: 'babel-turbo-transform',
-    parentSpan,
-    tooling: {},
+    parent: parentSpan,
   })
   transformAst(file, babelConfig, transformSpan)
   transformSpan.end()
 
   const generateSpan = createLocalSpan({
     name: 'babel-turbo-generate',
-    parentSpan,
-    tooling: {},
+    parent: parentSpan,
   })
   const { code, map } = generate(file.ast, file.opts.generatorOpts, file.code)
   generateSpan.end()

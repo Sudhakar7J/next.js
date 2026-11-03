@@ -101,7 +101,7 @@ export async function collectBuildTraces({
   distDir,
   edgeRuntimeRoutes,
   staticPages,
-  nextBuildSpan = createLocalSpan({ name: 'build', tooling: {} }),
+  nextBuildSpan = createLocalSpan({ name: 'build' }),
   buildTraceContext,
   outputFileTracingRoot,
 }: {
@@ -126,8 +126,7 @@ export async function collectBuildTraces({
   await traceLocalSpan(
     {
       name: 'node-file-trace-build',
-      parentSpan: nextBuildSpan,
-      tooling: {},
+      parent: nextBuildSpan,
       attributes: {
         isTurbotrace: 'false', // TODO(arlyon): remove this
       },
@@ -571,8 +570,7 @@ export async function collectBuildTraces({
   // apply outputFileTracingIncludes/outputFileTracingExcludes after runTurbotrace
   const includeExcludeSpan = createLocalSpan({
     name: 'apply-include-excludes',
-    parentSpan: nextBuildSpan,
-    tooling: {},
+    parent: nextBuildSpan,
   })
   await traceLocalSpan({ span: includeExcludeSpan }, async () => {
     const globOrig =

@@ -43,8 +43,7 @@ export default class HotReloaderRspack extends HotReloaderWebpack {
     await traceLocalSpan(
       {
         name: 'rspack-after-compile',
-        parentSpan: this.hotReloaderSpan,
-        tooling: {},
+        parent: this.hotReloaderSpan,
       },
       async () => {
         const hash = createHash('sha1')

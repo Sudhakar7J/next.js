@@ -179,7 +179,7 @@ export class TraceEntryPointsPlugin implements webpack.WebpackPluginInstance {
     const outputPath = compilation.outputOptions.path || ''
 
     await traceLocalSpan(
-      { name: 'create-trace-assets', parentSpan: span, tooling: {} },
+      { name: 'create-trace-assets', parent: span },
       async () => {
         const entryFilesMap = new Map<any, Set<string>>()
         const chunksToTrace = new Set<string>()
@@ -322,8 +322,7 @@ export class TraceEntryPointsPlugin implements webpack.WebpackPluginInstance {
       async (_stats: any, callback: any) => {
         const finishModulesSpan = createLocalSpan({
           name: 'finish-modules',
-          parentSpan: traceEntrypointsPluginSpan,
-          tooling: {},
+          parent: traceEntrypointsPluginSpan,
         })
         await traceLocalSpan({ span: finishModulesSpan }, async () => {
           // we create entry -> module maps so that we can
@@ -337,7 +336,7 @@ export class TraceEntryPointsPlugin implements webpack.WebpackPluginInstance {
           const depModMap = new Map<string, any>()
 
           await traceLocalSpan(
-            { name: 'get-entries', parentSpan: finishModulesSpan, tooling: {} },
+            { name: 'get-entries', parent: finishModulesSpan },
             async () => {
               for (const [name, entry] of compilation.entries.entries()) {
                 const normalizedName = name?.replace(/\\/g, '/')
@@ -500,9 +499,8 @@ export class TraceEntryPointsPlugin implements webpack.WebpackPluginInstance {
           await traceLocalSpan(
             {
               name: 'node-file-trace-plugin',
-              parentSpan: finishModulesSpan,
+              parent: finishModulesSpan,
               attributes: { traceEntryCount: entriesToTrace.length + '' },
-              tooling: {},
             },
             async () => {
               const result = await nodeFileTrace(entriesToTrace, {
@@ -530,8 +528,7 @@ export class TraceEntryPointsPlugin implements webpack.WebpackPluginInstance {
           await traceLocalSpan(
             {
               name: 'collect-traced-files',
-              parentSpan: finishModulesSpan,
-              tooling: {},
+              parent: finishModulesSpan,
             },
             () => {
               const parentFilesMap = getFilesMapFromReasons(
@@ -613,8 +610,7 @@ export class TraceEntryPointsPlugin implements webpack.WebpackPluginInstance {
         getCompilationSpan(compilation) || getCompilationSpan(compiler)!
       const traceEntrypointsPluginSpan = createLocalSpan({
         name: 'next-trace-entrypoint-plugin',
-        parentSpan: compilationSpan,
-        tooling: {},
+        parent: compilationSpan,
       })
 
       const readlink = async (path: string): Promise<string | null> => {

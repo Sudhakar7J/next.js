@@ -146,7 +146,7 @@ export function recordSpans(
           process.hrtime.bigint() - BigInt(Date.now()) * nsPerMs
         const source = captureToolingSpanSource(
           {
-            startTime: observation.startTime
+            monotonicStartTime: observation.startTime
               ? observation.startTime + correction
               : undefined,
             wallStartTimeMs: observation.startTime

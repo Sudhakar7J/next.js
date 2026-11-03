@@ -27,15 +27,13 @@ export class RspackProfilingPlugin {
           compilation,
           createLocalSpan({
             name: 'compilation-' + compilation.name,
-            parentSpan: this.runWebpackSpan,
-            tooling: {},
+            parent: this.runWebpackSpan,
           })
         )
 
         const compilationSpan = createLocalSpan({
           name: `compilation-${compilation.name}`,
-          parentSpan: this.runWebpackSpan,
-          tooling: {},
+          parent: this.runWebpackSpan,
         })
 
         const moduleHooks = rspack.NormalModule.getCompilationHooks(compilation)
@@ -52,9 +50,8 @@ export class RspackProfilingPlugin {
         compilation.hooks.buildModule.tap(pluginName, (module: any) => {
           const span = createLocalSpan({
             name: 'build-module',
-            parentSpan: compilationSpan,
+            parent: compilationSpan,
             attributes: { name: module.userRequest, layer: module.layer },
-            tooling: {},
           })
 
           moduleSpansByCompilation?.get(compilation)?.set(module, span)

@@ -66,9 +66,8 @@ export function runCompiler(
     compiler.run((err, stats) => {
       const webpackCloseSpan = createLocalSpan({
         name: 'webpack-close',
-        parentSpan: runWebpackSpan,
+        parent: runWebpackSpan,
         attributes: { name: config.name || 'unknown' },
-        tooling: {},
       })
       traceLocalSpan({ span: webpackCloseSpan }, () =>
         closeCompiler(compiler)
@@ -91,8 +90,7 @@ export function runCompiler(
         const result = traceLocalSpan(
           {
             name: 'webpack-generate-error-stats',
-            parentSpan: webpackCloseSpan,
-            tooling: {},
+            parent: webpackCloseSpan,
             synchronous: true,
           },
           () => generateStats({ errors: [], warnings: [], stats }, stats)

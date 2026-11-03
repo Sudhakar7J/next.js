@@ -2088,8 +2088,7 @@ export async function createHotReloaderTurbopack(
       return traceLocalSpan(
         {
           name: 'ensure-page',
-          parentSpan: hotReloaderSpan,
-          tooling: {},
+          parent: hotReloaderSpan,
           attributes: { inputPage },
         },
         async () => {

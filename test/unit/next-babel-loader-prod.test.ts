@@ -45,7 +45,7 @@ const babel = async (code: string, queryOpts = {} as any) => {
       getOptions: function () {
         return options
       },
-      currentTraceSpan: createLocalSpan({ name: 'test', tooling: {} }),
+      currentTraceSpan: createLocalSpan({ name: 'test' }),
     })(code, null)
 
     if (!isAsync) {

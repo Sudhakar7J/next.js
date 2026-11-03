@@ -914,7 +914,7 @@ export async function isPageStatic({
   })
 
   return traceLocalSpan(
-    { name: 'is-page-static-utils', tooling: { parentId } },
+    { name: 'is-page-static-utils', parent: parentId },
     async (): Promise<PageIsStaticResult> => {
       const { setHttpClientAndAgentOptions } =
         require('../server/setup-http-agent-env') as typeof import('../server/setup-http-agent-env')

@@ -183,7 +183,7 @@ describe('deployment lifecycle', () => {
 
   async function instance() {
     const next = new NextDeployInstance({ files: __dirname })
-    await next.setup(createLocalSpan({ name: 'test', tooling: {} }))
+    await next.setup(createLocalSpan({ name: 'test' }))
     return next
   }
 

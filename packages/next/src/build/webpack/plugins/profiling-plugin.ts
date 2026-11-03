@@ -77,9 +77,8 @@ export class ProfilingPlugin {
         const attributes = attrs ? attrs(...params) : attrs
         span = createLocalSpan({
           name,
-          parentSpan: parentSpan ? parentSpan(...params) : this.runWebpackSpan,
+          parent: parentSpan ? parentSpan(...params) : this.runWebpackSpan,
           attributes,
-          tooling: {},
         })
 
         if (onStart) onStart(span, ...params)
@@ -106,8 +105,7 @@ export class ProfilingPlugin {
         compilationSpan = getTracer().startSpan(
           ToolingSpan.webpackCompilation,
           {
-            parentSpan:
-              webpackInvalidSpans.get(compiler) || this.runWebpackSpan,
+            parent: webpackInvalidSpans.get(compiler) || this.runWebpackSpan,
             attributes: normalizeToolingAttributes({ name: compiler.name }),
           }
         )
@@ -129,7 +127,7 @@ export class ProfilingPlugin {
             ToolingSpan.webpackInvalidated,
             {
               spanName: `webpack-invalidated-${compiler.name}`,
-              parentSpan: this.runWebpackSpan,
+              parent: this.runWebpackSpan,
               attributes: {
                 trigger: fileName
                   ? path
@@ -200,8 +198,7 @@ export class ProfilingPlugin {
           if (issuerSpan) {
             span = createLocalSpan({
               name: spanName,
-              parentSpan: issuerSpan,
-              tooling: {},
+              parent: issuerSpan,
             })
           } else {
             let parentSpan: Span | undefined
@@ -223,7 +220,7 @@ export class ProfilingPlugin {
 
               parentSpan = compilationSpan
             }
-            span = createLocalSpan({ name: spanName, parentSpan, tooling: {} })
+            span = createLocalSpan({ name: spanName, parent: parentSpan })
           }
           span.setAttributes(
             normalizeToolingAttributes({
@@ -287,9 +284,8 @@ export class ProfilingPlugin {
           }
           const addEntrySpan = createLocalSpan({
             name: 'add-entry',
-            parentSpan,
+            parent: parentSpan,
             attributes: { request: entry.request },
-            tooling: {},
           })
           spans.set(entry, addEntrySpan)
         })
@@ -408,8 +404,7 @@ export class ProfilingPlugin {
               label,
               createLocalSpan({
                 name: label.replace(/ /g, '-'),
-                parentSpan: span,
-                tooling: {},
+                parent: span,
               })
             )
           }

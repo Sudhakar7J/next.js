@@ -101,7 +101,7 @@ let devSpanAttrs: { 'rage-restart': boolean; 'missing-next-dir': boolean } = {
   'missing-next-dir': false,
 }
 const sessionStarted = Date.now()
-const sessionSpan = createLocalSpan({ name: 'next-dev', tooling: {} })
+const sessionSpan = createLocalSpan({ name: 'next-dev' })
 
 // If the user restarts the dev server within this window we count it as a "rage restart".
 const RAGE_RESTART_THRESHOLD_MS = 90_000

@@ -206,21 +206,18 @@ async function exportAppImpl(
   dir = resolve(dir)
 
   // attempt to load global env values so they are available in next.config.js
-  traceLocalSpan(
-    { name: 'load-dotenv', parentSpan: span, tooling: {}, synchronous: true },
-    () => loadEnvConfig(dir, false, Log)
+  traceLocalSpan({ name: 'load-dotenv', parent: span, synchronous: true }, () =>
+    loadEnvConfig(dir, false, Log)
   )
 
   const { enabledDirectories } = options
 
   const nextConfig =
     options.nextConfig ||
-    (await traceLocalSpan(
-      { name: 'load-next-config', parentSpan: span, tooling: {} },
-      () =>
-        loadConfig(PHASE_EXPORT, dir, {
-          debugPrerender: options.debugPrerender,
-        })
+    (await traceLocalSpan({ name: 'load-next-config', parent: span }, () =>
+      loadConfig(PHASE_EXPORT, dir, {
+        debugPrerender: options.debugPrerender,
+      })
     ))
 
   const distDir = join(dir, getBuildDistDir(nextConfig))
@@ -383,9 +380,8 @@ async function exportAppImpl(
     if (!options.silent) {
       Log.info('Copying "static" directory')
     }
-    await traceLocalSpan(
-      { name: 'copy-static-directory', parentSpan: span, tooling: {} },
-      () => recursiveCopy(join(dir, 'static'), join(outDir, 'static'))
+    await traceLocalSpan({ name: 'copy-static-directory', parent: span }, () =>
+      recursiveCopy(join(dir, 'static'), join(outDir, 'static'))
     )
   }
 
@@ -398,7 +394,7 @@ async function exportAppImpl(
       Log.info('Copying "static build" directory')
     }
     await traceLocalSpan(
-      { name: 'copy-next-static-directory', parentSpan: span, tooling: {} },
+      { name: 'copy-next-static-directory', parent: span },
       () =>
         recursiveCopy(
           join(distDir, CLIENT_STATIC_FILES_PATH),
@@ -420,7 +416,7 @@ async function exportAppImpl(
 
   if (!options.buildExport) {
     const { isNextImageImported } = await traceLocalSpan(
-      { name: 'is-next-image-imported', parentSpan: span, tooling: {} },
+      { name: 'is-next-image-imported', parent: span },
       () =>
         fs
           .readFile(join(distDir, EXPORT_MARKER), 'utf8')
@@ -553,7 +549,7 @@ async function exportAppImpl(
   }
 
   const exportPathMap = await traceLocalSpan(
-    { name: 'run-export-path-map', parentSpan: span, tooling: {} },
+    { name: 'run-export-path-map', parent: span },
     async () => {
       if (typeof nextConfig.exportPathMap !== 'function') {
         return defaultPathMap
@@ -691,15 +687,13 @@ async function exportAppImpl(
     if (!options.silent) {
       Log.info('Copying "public" directory')
     }
-    await traceLocalSpan(
-      { name: 'copy-public-directory', parentSpan: span, tooling: {} },
-      () =>
-        recursiveCopy(publicDir, outDir, {
-          filter(path) {
-            // Exclude paths used by pages
-            return !exportPathMap[path]
-          },
-        })
+    await traceLocalSpan({ name: 'copy-public-directory', parent: span }, () =>
+      recursiveCopy(publicDir, outDir, {
+        filter(path) {
+          // Exclude paths used by pages
+          return !exportPathMap[path]
+        },
+      })
     )
   }
 
@@ -1155,8 +1149,7 @@ export default async function exportApp(
 ): Promise<ExportAppResult | null> {
   const nextExportSpan = createLocalSpan({
     name: 'next-export',
-    parentSpan: span,
-    tooling: {},
+    parent: span,
   })
 
   return traceLocalSpan({ span: nextExportSpan }, async () => {

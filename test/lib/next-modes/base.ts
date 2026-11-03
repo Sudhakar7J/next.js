@@ -275,14 +275,14 @@ export class NextInstance {
 
   protected async beforeInstall(parentSpan: Span) {
     await traceLocalSpan(
-      { name: 'writeInitialFiles', parentSpan, tooling: {} },
+      { name: 'writeInitialFiles', parent: parentSpan },
       async () => {
         await this.writeInitialFiles()
       }
     )
 
     await traceLocalSpan(
-      { name: 'writeOverrideFiles', parentSpan, tooling: {} },
+      { name: 'writeOverrideFiles', parent: parentSpan },
       async () => {
         await this.writeOverrideFiles()
       }
@@ -301,7 +301,7 @@ export class NextInstance {
     }
 
     await traceLocalSpan(
-      { name: 'createTestDir', parentSpan, tooling: {} },
+      { name: 'createTestDir', parent: parentSpan },
       async (rootSpan) => {
         const skipIsolatedNext = !!process.env.NEXT_SKIP_ISOLATE
         if (!skipIsolatedNext) {

@@ -80,10 +80,10 @@ import type { PrerenderManifest } from '../../build'
 import { getRouteRegex } from '../../shared/lib/router/utils/route-regex'
 import { HMR_MESSAGE_SENT_TO_BROWSER } from './hot-reloader-types'
 import {
-  registerLocalSpanRecorder,
   createLocalSpan,
   traceLocalSpan,
 } from '../lib/trace/local-span-recorder'
+import { registerLocalSpanRecorder } from '../lib/trace/request-span-recorder'
 import {
   appendArchivedRequestInsightUpdateToJournal,
   appendRequestInsightToJournal,
@@ -208,7 +208,7 @@ export default class DevServer extends Server {
     this.bundlerService = options.bundlerService
     this.startServerSpan =
       options.startServerSpan ??
-      createLocalSpan({ name: 'start-next-dev-server', tooling: {} })
+      createLocalSpan({ name: 'start-next-dev-server' })
     this.renderOpts.ErrorDebug = ReactDevOverlay
     this.staticPathsCache = new LRUCache(
       // 5MB
@@ -567,7 +567,6 @@ export default class DevServer extends Server {
   ): Promise<void> {
     const span = createLocalSpan({
       name: 'handle-request',
-      tooling: {},
       attributes: { url: req.url },
     })
     const result = await traceLocalSpan({ span }, async () => {
@@ -578,8 +577,7 @@ export default class DevServer extends Server {
     const memoryUsage = process.memoryUsage()
     createLocalSpan({
       name: 'memory-usage',
-      parentSpan: span,
-      tooling: {},
+      parent: span,
       attributes: {
         url: req.url,
         'memory.rss': String(memoryUsage.rss),

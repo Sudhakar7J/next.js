@@ -292,88 +292,82 @@ async function createNext(
     }
 
     setupTracing()
-    return await traceLocalSpan(
-      { name: 'createNext', tooling: {} },
-      async (rootSpan) => {
-        const useTurbo = isNextTestWasm
-          ? false
-          : (opts?.turbo ?? shouldUseTurbopack())
+    return await traceLocalSpan({ name: 'createNext' }, async (rootSpan) => {
+      const useTurbo = isNextTestWasm
+        ? false
+        : (opts?.turbo ?? shouldUseTurbopack())
 
-        if (testMode === 'dev') {
-          // next dev
-          traceLocalSpan(
-            {
-              name: 'init next dev instance',
-              parentSpan: rootSpan,
-              tooling: {},
-              synchronous: true,
-            },
-            () => {
-              nextInstance = new NextDevInstance({
-                ...opts,
-                turbo: useTurbo,
-              })
-            }
-          )
-        } else if (testMode === 'deploy') {
-          // Vercel
-          traceLocalSpan(
-            {
-              name: 'init next deploy instance',
-              parentSpan: rootSpan,
-              tooling: {},
-              synchronous: true,
-            },
-            () => {
-              nextInstance = new NextDeployInstance({
-                ...opts,
-              })
-            }
-          )
-        } else {
-          // next build + next start
-          traceLocalSpan(
-            {
-              name: 'init next start instance',
-              parentSpan: rootSpan,
-              tooling: {},
-              synchronous: true,
-            },
-            () => {
-              nextInstance = new NextStartInstance({
-                ...opts,
-              })
-            }
-          )
-        }
-
-        nextInstance = nextInstance!
-
-        nextInstance.on('destroy', () => {
-          nextInstance = undefined
-          clearFixture()
-        })
-
-        await nextInstance.setup(rootSpan)
-
-        // Lazy `// @gate` conditions read this fixture's resolved next.config.
-        // Registering the instance (not a snapshot) before `start()` keeps
-        // `skipStart` suites and rebuild flows working: nothing is resolved until
-        // a gate actually asks. See test/lib/gate/README.md.
-        registerFixture(nextInstance)
-
-        if (!opts.skipStart) {
-          await traceLocalSpan(
-            { name: 'start next instance', parentSpan: rootSpan, tooling: {} },
-            async () => {
-              await nextInstance!.start()
-            }
-          )
-        }
-
-        return nextInstance!
+      if (testMode === 'dev') {
+        // next dev
+        traceLocalSpan(
+          {
+            name: 'init next dev instance',
+            parent: rootSpan,
+            synchronous: true,
+          },
+          () => {
+            nextInstance = new NextDevInstance({
+              ...opts,
+              turbo: useTurbo,
+            })
+          }
+        )
+      } else if (testMode === 'deploy') {
+        // Vercel
+        traceLocalSpan(
+          {
+            name: 'init next deploy instance',
+            parent: rootSpan,
+            synchronous: true,
+          },
+          () => {
+            nextInstance = new NextDeployInstance({
+              ...opts,
+            })
+          }
+        )
+      } else {
+        // next build + next start
+        traceLocalSpan(
+          {
+            name: 'init next start instance',
+            parent: rootSpan,
+            synchronous: true,
+          },
+          () => {
+            nextInstance = new NextStartInstance({
+              ...opts,
+            })
+          }
+        )
       }
-    )
+
+      nextInstance = nextInstance!
+
+      nextInstance.on('destroy', () => {
+        nextInstance = undefined
+        clearFixture()
+      })
+
+      await nextInstance.setup(rootSpan)
+
+      // Lazy `// @gate` conditions read this fixture's resolved next.config.
+      // Registering the instance (not a snapshot) before `start()` keeps
+      // `skipStart` suites and rebuild flows working: nothing is resolved until
+      // a gate actually asks. See test/lib/gate/README.md.
+      registerFixture(nextInstance)
+
+      if (!opts.skipStart) {
+        await traceLocalSpan(
+          { name: 'start next instance', parent: rootSpan },
+          async () => {
+            await nextInstance!.start()
+          }
+        )
+      }
+
+      return nextInstance!
+    })
   } catch (err) {
     require('console').error('Failed to create next instance', err)
     try {

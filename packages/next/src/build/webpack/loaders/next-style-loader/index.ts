@@ -8,8 +8,7 @@ loaderApi.pitch = function loader(this: any, request: any): any {
   return traceLocalSpan(
     {
       name: 'next-style-loader',
-      parentSpan: this.currentTraceSpan,
-      tooling: {},
+      parent: this.currentTraceSpan,
       synchronous: true,
     },
     () => {

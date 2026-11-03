@@ -55,7 +55,7 @@ export async function getBlurImage(
       blurDataURL = url.href.slice(prefix.length)
     } else {
       const resizedImage = await traceLocalSpan(
-        { name: 'image-resize', parentSpan, tooling: {} },
+        { name: 'image-resize', parent: parentSpan },
         () =>
           optimizeImage({
             buffer: content,
@@ -68,8 +68,7 @@ export async function getBlurImage(
       blurDataURL = traceLocalSpan(
         {
           name: 'image-base64-tostring',
-          parentSpan,
-          tooling: {},
+          parent: parentSpan,
           synchronous: true,
         },
         () =>

@@ -18,8 +18,7 @@ function nextImageLoader(this: any, content: Buffer) {
   return traceLocalSpan(
     {
       name: 'next-image-loader',
-      parentSpan: this.currentTraceSpan,
-      tooling: {},
+      parent: this.currentTraceSpan,
     },
     async (imageLoaderSpan) => {
       const options: Options = this.getOptions()
@@ -48,8 +47,7 @@ function nextImageLoader(this: any, content: Buffer) {
       const imageSize = await traceLocalSpan(
         {
           name: 'image-size-calculation',
-          parentSpan: imageLoaderSpan,
-          tooling: {},
+          parent: imageLoaderSpan,
         },
         () => getImageSize(content).catch((err) => err)
       )
@@ -74,8 +72,7 @@ function nextImageLoader(this: any, content: Buffer) {
       const stringifiedData = traceLocalSpan(
         {
           name: 'image-data-stringify',
-          parentSpan: imageLoaderSpan,
-          tooling: {},
+          parent: imageLoaderSpan,
           synchronous: true,
         },
         () =>

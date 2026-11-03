@@ -17,6 +17,7 @@ import {
   traceLocalSpan,
   withLocalSpan,
 } from '../server/lib/trace/local-span-recorder'
+import { createRequestSpan } from '../server/lib/trace/request-span-recorder'
 import {
   recordSpans,
   runWithLocalSpanSink,
@@ -161,14 +162,90 @@ describe('Trace', () => {
   })
 
   describe('direct local recorder tooling', () => {
+    it('uses one live-or-numeric parent input, including zero and detached roots', () => {
+      initializeTraceState({
+        lastId: 0,
+        defaultParentSpanId: 77,
+        shouldSaveTraceEvents: true,
+      })
+      const parent = createLocalSpan({ name: 'parent' })
+      const live = createLocalSpan({ name: 'live', parent })
+      const transported = createLocalSpan({ name: 'transported', parent: 42 })
+      const zero = createLocalSpan({ name: 'zero', parent: 0 })
+      const detached = createLocalSpan({ name: 'detached', parent: null })
+      for (const span of [parent, live, transported, zero, detached]) span.end()
+      expect(
+        getTraceEvents().map(({ name, parentId }) => ({ name, parentId }))
+      ).toEqual([
+        { name: 'parent', parentId: 77 },
+        { name: 'live', parentId: 1 },
+        { name: 'transported', parentId: 42 },
+        { name: 'zero', parentId: 0 },
+        { name: 'detached', parentId: undefined },
+      ])
+    })
+    it('keeps explicit monotonic zero separate from public epoch timestamps', () => {
+      const now = 1_700_000_000_000
+      const clock = jest
+        .spyOn(process.hrtime, 'bigint')
+        .mockReturnValue(100_000_000n)
+      const wall = jest.spyOn(Date, 'now').mockReturnValue(now)
+      try {
+        const zero = createLocalSpan({
+          name: 'zero-clock',
+          monotonicStartTime: 0n,
+          wallStartTimeMs: now,
+        })
+        zero.end(toolingSpanTime(1_000_999n))
+        const epoch = createLocalSpan({
+          name: 'epoch-clock',
+          startTime: new Date(now - 15),
+        })
+        epoch.end(new Date(now + 25))
+        expect(getTraceEvents()).toMatchObject([
+          { name: 'zero-clock', timestamp: 0, duration: 1000, startTime: now },
+          {
+            name: 'epoch-clock',
+            timestamp: 85000,
+            duration: 40000,
+            startTime: now - 15,
+          },
+        ])
+      } finally {
+        clock.mockRestore()
+        wall.mockRestore()
+      }
+    })
+
+    it('delivers explicit completed records without capturing request sinks or file delivery', () => {
+      const sink = jest.fn()
+      const delivery = jest.fn()
+      const span = runWithLocalSpanSink(sink, () =>
+        createLocalSpan({ name: 'custom-delivery', parent: 0 }, delivery)
+      )
+      span.setAttribute('before', true)
+      span.end()
+      span.setAttribute('late', true)
+      expect(delivery).toHaveBeenCalledTimes(1)
+      expect(delivery).toHaveBeenCalledWith([
+        expect.objectContaining({
+          name: 'custom-delivery',
+          attributes: { before: true },
+        }),
+      ])
+      expect(delivery.mock.calls[0][0][0].requestId).toBeUndefined()
+      expect(sink).not.toHaveBeenCalled()
+      expect(getTraceEvents()).toEqual([])
+      expect((span as any).recordSpans).toBeUndefined()
+      expect(span.name).toBe('')
+    })
+
     it('uses the existing concrete recorder with normalized tags and exact source clocks', () => {
       const span = createLocalSpan({
         name: 'direct',
         attributes: { raw: { nested: [true, null] }, unset: undefined },
-        tooling: {
-          startTime: 1234567890123456789n,
-          wallStartTimeMs: 1700000000000,
-        },
+        monotonicStartTime: 1234567890123456789n,
+        wallStartTimeMs: 1700000000000,
       })
       expect(span).toBeInstanceOf(LocalRecordingSpan)
       span.setAttributes(normalizeToolingAttributes({ other: { value: 42 } }))
@@ -190,7 +267,7 @@ describe('Trace', () => {
     })
 
     it('records completed native observations without constructing live spans', () => {
-      const root = createLocalSpan({ name: 'root', tooling: {} })
+      const root = createLocalSpan({ name: 'root' })
       const startMs = Date.now() - 60_000
       const start = BigInt(startMs) * 1_000_000n + 123n
       const sink = jest.fn()
@@ -256,13 +333,13 @@ describe('Trace', () => {
       expect(recorded[0]).toBe(events[0])
       expect(recorded[1]).toBe(events[1])
       expect(exportTraceState().lastId).toBe(22)
-      const next = createLocalSpan({ name: 'after import', tooling: {} })
+      const next = createLocalSpan({ name: 'after import' })
       expect(getToolingSpanSource(next)?.id).toBe(23)
       next.end()
     })
 
     it('reuses a precreated span for callback completion without a second recorder', async () => {
-      const span = createLocalSpan({ name: 'precreated', tooling: {} })
+      const span = createLocalSpan({ name: 'precreated' })
       const error = new Error('original failure')
       expect(
         traceLocalSpan({ span, synchronous: true }, (callbackSpan) => {
@@ -284,7 +361,7 @@ describe('Trace', () => {
     it('does not capture request sinks while creating tooling recorders', () => {
       const sink = jest.fn()
       const span = runWithLocalSpanSink(sink, () =>
-        createLocalSpan({ name: 'tooling', tooling: {} })
+        createLocalSpan({ name: 'tooling' })
       )
       // A tooling span must not retain a request destination even before end.
       expect((span as any).recordSpans).toBeUndefined()
@@ -294,12 +371,11 @@ describe('Trace', () => {
     })
 
     it('keeps numeric tooling parentage independent of request IDs', () => {
-      const parent = createLocalSpan({ name: 'parent', tooling: {} })
+      const parent = createLocalSpan({ name: 'parent' })
       parent.end()
       const child = createLocalSpan({
         name: 'child',
-        parentSpan: parent,
-        tooling: {},
+        parent: parent,
       })
       child.end()
       expect(
@@ -311,17 +387,16 @@ describe('Trace', () => {
     })
 
     it('traces tooling callbacks with explicit parents without changing request scope', async () => {
-      const request = createLocalSpan({ name: 'request scope' })
+      const request = createRequestSpan({ name: 'request scope' })
       await withLocalSpan(request, async () => {
         const result = traceLocalSpan(
-          { name: 'tooling parent', tooling: {}, synchronous: true },
+          { name: 'tooling parent', synchronous: true },
           (parent) => {
             expect(getActiveLocalSpan()).toBe(request)
             return traceLocalSpan(
               {
                 name: 'tooling child',
-                parentSpan: parent,
-                tooling: {},
+                parent: parent,
                 synchronous: true,
               },
               () => {
@@ -333,7 +408,7 @@ describe('Trace', () => {
         )
         expect(result).toBe(42)
         await expect(
-          traceLocalSpan({ name: 'async tooling', tooling: {} }, async () => {
+          traceLocalSpan({ name: 'async tooling' }, async () => {
             expect(getActiveLocalSpan()).toBe(request)
             return 7
           })
@@ -353,15 +428,12 @@ describe('Trace', () => {
     it('keeps sync/async tooling error identity and the legacy failed tag', async () => {
       const error = new Error('tooling failure')
       expect(() =>
-        traceLocalSpan(
-          { name: 'sync failed', tooling: {}, synchronous: true },
-          () => {
-            throw error
-          }
-        )
+        traceLocalSpan({ name: 'sync failed', synchronous: true }, () => {
+          throw error
+        })
       ).toThrow(error)
       await expect(
-        traceLocalSpan({ name: 'async failed', tooling: {} }, async () => {
+        traceLocalSpan({ name: 'async failed' }, async () => {
           throw error
         })
       ).rejects.toBe(error)
@@ -384,7 +456,7 @@ describe('Trace', () => {
         setGlobal('distDir', dir)
         setGlobal('phase', PHASE_PRODUCTION_BUILD)
         runWithLocalSpanSink(sink, () => {
-          const span = createLocalSpan({ name: 'next-build', tooling: {} })
+          const span = createLocalSpan({ name: 'next-build' })
           span.end()
         })
         flushAllTraces()
@@ -409,8 +481,8 @@ describe('Trace', () => {
       let request: LocalRecordingSpan
       try {
         runWithLocalSpanSink(sink, () => {
-          request = createLocalSpan({ name: 'scoped request' })
-          createLocalSpan({ name: 'tooling', tooling: {} }).end()
+          request = createRequestSpan({ name: 'scoped request' })
+          createLocalSpan({ name: 'tooling' }).end()
         })
         request!.end()
         request!.setAttribute('late', true)
@@ -429,7 +501,7 @@ describe('Trace', () => {
 
     it('marks completion before a reentrant throwing file subscriber', () => {
       const error = new Error('writer failed')
-      const span = createLocalSpan({ name: 'writer failure', tooling: {} })
+      const span = createLocalSpan({ name: 'writer failure' })
       const report = jest
         .spyOn(traceReporter, 'report')
         .mockImplementation(() => {
@@ -456,19 +528,17 @@ describe('Trace', () => {
       const root = createLocalSpan({
         name: 'root-span',
         attributes: { 'some-tag': 'some-value' },
-        tooling: {},
       })
       traceLocalSpan(
         {
           name: 'child-span',
-          parentSpan: root,
-          tooling: {},
+          parent: root,
           synchronous: true,
         },
         () => null
       )
       await traceLocalSpan(
-        { name: 'async-child-span', parentSpan: root, tooling: {} },
+        { name: 'async-child-span', parent: root },
         async () => {
           const delayedPromise = new Promise((resolve) => {
             setTimeout(resolve, 100)
@@ -519,7 +589,7 @@ describe('Trace', () => {
     })
 
     it('records completed manual observations with their own start time', () => {
-      const root = createLocalSpan({ name: 'root-span', tooling: {} })
+      const root = createLocalSpan({ name: 'root-span' })
       // A span that started one minute ago and ran for 1.5s, as happens when
       // the event is only recorded after the work completes (e.g. Turbopack
       // compilation events forwarded from Rust).
@@ -788,24 +858,23 @@ describe('Trace', () => {
 
   describe('Worker', () => {
     it('exports and initializes trace state', () => {
-      const root = createLocalSpan({ name: 'root-span', tooling: {} })
+      const root = createLocalSpan({ name: 'root-span' })
       expect(getToolingSpanSource(root)?.id).toEqual(1)
       const traceState = exportTraceState()
       expect(traceState.lastId).toEqual(1)
       initializeTraceState({
         lastId: 101,
       })
-      const span = createLocalSpan({ name: 'another-span', tooling: {} })
+      const span = createLocalSpan({ name: 'another-span' })
       expect(getToolingSpanSource(span)?.id).toEqual(102)
     })
 
     it('trace data is serializable to a worker', async () => {
-      const root = createLocalSpan({ name: 'root-span', tooling: {} })
+      const root = createLocalSpan({ name: 'root-span' })
       traceLocalSpan(
         {
           name: 'child-span',
-          parentSpan: root,
-          tooling: {},
+          parent: root,
           synchronous: true,
         },
         () => null
@@ -829,12 +898,11 @@ describe('Trace', () => {
         defaultParentSpanId: 1,
         shouldSaveTraceEvents: true,
       })
-      const worker1Span = createLocalSpan({ name: 'worker1', tooling: {} })
+      const worker1Span = createLocalSpan({ name: 'worker1' })
       traceLocalSpan(
         {
           name: 'webpack-compilation1',
-          parentSpan: worker1Span,
-          tooling: {},
+          parent: worker1Span,
           synchronous: true,
         },
         () => null
@@ -850,12 +918,11 @@ describe('Trace', () => {
         defaultParentSpanId: 1,
         shouldSaveTraceEvents: true,
       })
-      const worker2Span = createLocalSpan({ name: 'worker2', tooling: {} })
+      const worker2Span = createLocalSpan({ name: 'worker2' })
       traceLocalSpan(
         {
           name: 'webpack-compilation2',
-          parentSpan: worker2Span,
-          tooling: {},
+          parent: worker2Span,
           synchronous: true,
         },
         () => null
@@ -871,12 +938,11 @@ describe('Trace', () => {
         lastId: 0,
         shouldSaveTraceEvents: true,
       })
-      const root = createLocalSpan({ name: 'next-build', tooling: {} })
+      const root = createLocalSpan({ name: 'next-build' })
       traceLocalSpan(
         {
           name: 'some-child-span',
-          parentSpan: root,
-          tooling: {},
+          parent: root,
           synchronous: true,
         },
         () => null
@@ -888,8 +954,7 @@ describe('Trace', () => {
       traceLocalSpan(
         {
           name: 'another-child-span',
-          parentSpan: root,
-          tooling: {},
+          parent: root,
           synchronous: true,
         },
         () => null

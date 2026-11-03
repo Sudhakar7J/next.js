@@ -10,7 +10,7 @@ export function turbopackBuild(
   const nextBuildSpan = NextBuildContext.nextBuildSpan!
   return getTracer().trace(
     ToolingSpan.runTurbopack,
-    { parentSpan: nextBuildSpan },
+    { parent: nextBuildSpan },
     () => turbopackBuildImpl(telemetry)
   )
 }

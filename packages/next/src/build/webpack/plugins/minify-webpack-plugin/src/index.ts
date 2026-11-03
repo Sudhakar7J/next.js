@@ -64,8 +64,7 @@ export class MinifyPlugin {
 
     const MinifierSpan = createLocalSpan({
       name: 'minify-webpack-plugin-optimize',
-      parentSpan: compilationSpan,
-      tooling: {},
+      parent: compilationSpan,
     })
 
     if (compilation.name) {
@@ -175,8 +174,7 @@ export class MinifyPlugin {
 
             const minifySpan = createLocalSpan({
               name: 'minify-js',
-              parentSpan: MinifierSpan,
-              tooling: {},
+              parent: MinifierSpan,
             })
             minifySpan.setAttribute('name', name)
             minifySpan.setAttribute(

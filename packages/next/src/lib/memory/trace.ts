@@ -73,9 +73,8 @@ export function traceMemoryUsage(
   )
   createLocalSpan({
     name: 'memory-usage',
-    parentSpan,
+    parent: parentSpan,
     attributes: tracedMemoryUsageAsStrings,
-    tooling: {},
   })
   if (process.env.EXPERIMENTAL_DEBUG_MEMORY_USAGE) {
     const percentageHeapUsed = (100 * heapUsed) / heapMax

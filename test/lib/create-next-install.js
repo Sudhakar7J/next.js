@@ -293,28 +293,26 @@ async function packPackages(parentSpan) {
     retries: { retries: 3600, factor: 1, minTimeout: 1000, maxTimeout: 1000 },
   })
   try {
-    await traceLocalSpan(
-      { name: 'turbo-run-pack', parentSpan, tooling: {} },
-      () =>
-        execa(
-          'pnpm',
-          [
-            'turbo',
-            'run',
-            'pack-for-isolated-tests',
-            '--output-logs',
-            'new-only',
-            '--ui',
-            'stream',
-          ],
-          {
-            cwd: repositoryDirectory,
-            stdio: ['ignore', 'inherit', 'inherit'],
-          }
-        )
+    await traceLocalSpan({ name: 'turbo-run-pack', parent: parentSpan }, () =>
+      execa(
+        'pnpm',
+        [
+          'turbo',
+          'run',
+          'pack-for-isolated-tests',
+          '--output-logs',
+          'new-only',
+          '--ui',
+          'stream',
+        ],
+        {
+          cwd: repositoryDirectory,
+          stdio: ['ignore', 'inherit', 'inherit'],
+        }
+      )
     )
     return await traceLocalSpan(
-      { name: 'linkPackages', parentSpan, tooling: {} },
+      { name: 'linkPackages', parent: parentSpan },
       () => linkPackages({ repoDir: repositoryDirectory })
     )
   } finally {
@@ -346,7 +344,7 @@ async function createNextInstall({
   const tmpDir = await fs.realpath(process.env.NEXT_TEST_DIR || os.tmpdir())
 
   return await traceLocalSpan(
-    { name: 'createNextInstall', parentSpan, tooling: {} },
+    { name: 'createNextInstall', parent: parentSpan },
     async (rootSpan) => {
       const origRepoDir = path.join(__dirname, '../../')
       const isolationRoot = path.join(
@@ -487,7 +485,7 @@ async function createNextInstall({
 
       if (beforeInstall !== undefined) {
         await traceLocalSpan(
-          { name: 'beforeInstall', parentSpan: rootSpan, tooling: {} },
+          { name: 'beforeInstall', parent: rootSpan },
           async (span) => {
             await beforeInstall(span, installDir)
           }
@@ -512,16 +510,15 @@ async function createNextInstall({
       if (installString !== null) {
         console.log('running install command', installString)
         await traceLocalSpan(
-          { name: 'run custom install', parentSpan: rootSpan, tooling: {} },
+          { name: 'run custom install', parent: rootSpan },
           () => runCustomInstall(installString, installDir)
         )
       } else {
         await traceLocalSpan(
           {
             name: 'run generic install command',
-            parentSpan: rootSpan,
+            parent: rootSpan,
             attributes: combinedDependencies,
-            tooling: {},
           },
           () => installDependencies(installDir, tmpDir)
         )

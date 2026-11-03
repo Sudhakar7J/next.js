@@ -87,9 +87,9 @@ export function reportToolingSpans(events: readonly TraceEvent[]): void {
   for (const event of events) reporter.report(event)
 }
 
-export type ToolingSpanOptions = {
-  parentId?: SpanId
-  startTime?: bigint
+export type LocalSpanTiming = {
+  startTime?: import('@opentelemetry/api').SpanOptions['startTime']
+  monotonicStartTime?: bigint
   wallStartTimeMs?: number
 }
 
@@ -107,14 +107,35 @@ export type ToolingSpanSource = {
 }
 
 export function captureToolingSpanSource(
-  options: ToolingSpanOptions,
+  options: LocalSpanTiming & { parent?: SpanId | null },
   parent?: ToolingSpanSource
 ): ToolingSpanSource {
+  const time = options.startTime
+  const epochMs =
+    time instanceof Date
+      ? time.getTime()
+      : Array.isArray(time)
+        ? time[0] * 1000 + time[1] / 1_000_000
+        : typeof time === 'number'
+          ? time < performance.timeOrigin / 2
+            ? performance.timeOrigin + time
+            : time
+          : undefined
+  const monotonicStartTime =
+    options.monotonicStartTime ??
+    (epochMs === undefined
+      ? process.hrtime.bigint()
+      : epochMillisecondsToNanoseconds(epochMs) +
+        process.hrtime.bigint() -
+        BigInt(Date.now()) * NUM_OF_MILLISEC_IN_NANOSEC)
   return {
     id: getId(),
-    parentId: options.parentId ?? parent?.id ?? defaultParentSpanId,
-    startTime: options.startTime || process.hrtime.bigint(),
-    wallStartTimeMs: options.wallStartTimeMs ?? Date.now(),
+    parentId:
+      options.parent === null
+        ? undefined
+        : (options.parent ?? parent?.id ?? defaultParentSpanId),
+    startTime: monotonicStartTime,
+    wallStartTimeMs: options.wallStartTimeMs ?? epochMs ?? Date.now(),
     reportingParent: parent?.reporting ?? parent?.reportingParent,
     reportingParentId: parent?.reportingParentId,
   }
@@ -139,6 +160,16 @@ export function toolingSpanTime(time: bigint): [number, number] {
   ]
 }
 
+// Multiply integer milliseconds as bigint so epoch magnitudes cannot lose the
+// low nanoseconds before the clock correction is applied.
+function epochMillisecondsToNanoseconds(time: number): bigint {
+  const whole = Math.trunc(time)
+  return (
+    BigInt(whole) * NUM_OF_MILLISEC_IN_NANOSEC +
+    BigInt(Math.trunc((time - whole) * 1_000_000))
+  )
+}
+
 export function completeToolingSpan(
   source: ToolingSpanSource,
   name: string,
@@ -158,7 +189,7 @@ export function completeToolingSpan(
       epochMs < performance.timeOrigin / 2
         ? performance.timeOrigin + epochMs
         : epochMs
-    end = BigInt(Math.trunc(timeMs * 1_000_000)) + correction
+    end = epochMillisecondsToNanoseconds(timeMs) + correction
   }
   const duration = (end - source.startTime) / NUM_OF_MICROSEC_IN_NANOSEC
   if (duration > Number.MAX_SAFE_INTEGER) {

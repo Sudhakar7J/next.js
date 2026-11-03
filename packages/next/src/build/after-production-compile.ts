@@ -45,7 +45,7 @@ export async function runAfterProductionCompile({
   try {
     const startTime = process.hrtime.bigint()
     await traceLocalSpan(
-      { name: 'after-production-compile', parentSpan: buildSpan, tooling: {} },
+      { name: 'after-production-compile', parent: buildSpan },
       async () => {
         await run(metadata)
       }

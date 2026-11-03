@@ -11,8 +11,7 @@ function nextClientPagesLoader(this: any) {
   return traceLocalSpan(
     {
       name: 'next-client-pages-loader',
-      parentSpan: this.currentTraceSpan,
-      tooling: {},
+      parent: this.currentTraceSpan,
       synchronous: true,
     },
     (pagesLoaderSpan) => {

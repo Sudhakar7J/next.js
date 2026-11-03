@@ -146,7 +146,7 @@ export async function webpackBuild(
   const nextBuildSpan = NextBuildContext.nextBuildSpan!
   return getTracer().trace(
     ToolingSpan.runWebpack,
-    { parentSpan: nextBuildSpan },
+    { parent: nextBuildSpan },
     async () => {
       if (withWorker) {
         debug('using separate compiler workers')

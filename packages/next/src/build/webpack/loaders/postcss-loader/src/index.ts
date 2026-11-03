@@ -21,8 +21,7 @@ export default async function loader(
 ): Promise<void> {
   const loaderSpan = createLocalSpan({
     name: 'postcss-loader',
-    parentSpan: this.currentTraceSpan,
-    tooling: {},
+    parent: this.currentTraceSpan,
   })
   const callback = this.async()
 
@@ -52,8 +51,7 @@ export default async function loader(
       processOptions.map.prev = traceLocalSpan(
         {
           name: 'normalize-source-map',
-          parentSpan: loaderSpan,
-          tooling: {},
+          parent: loaderSpan,
           synchronous: true,
         },
         () => normalizeSourceMap(sourceMap, this.context)
@@ -75,7 +73,7 @@ export default async function loader(
 
     try {
       result = await traceLocalSpan(
-        { name: 'postcss-process', parentSpan: loaderSpan, tooling: {} },
+        { name: 'postcss-process', parent: loaderSpan },
         () => postcssWithPlugins.process(root || content, processOptions)
       )
     } catch (error: any) {

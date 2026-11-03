@@ -873,8 +873,7 @@ async function writeStandaloneDirectory(
   await traceLocalSpan(
     {
       name: 'write-standalone-directory',
-      parentSpan: nextBuildSpan,
-      tooling: {},
+      parent: nextBuildSpan,
     },
     async () => {
       await copyTracedFiles(
@@ -1121,7 +1120,7 @@ async function getBuildId(
     return 'build-TfctsWXpff2fKS'
   }
   return await traceLocalSpan(
-    { name: 'generate-buildid', parentSpan: nextBuildSpan, tooling: {} },
+    { name: 'generate-buildid', parent: nextBuildSpan },
     () => generateBuildId(config.generateBuildId, nanoid)
   )
 }
@@ -1188,8 +1187,7 @@ export default async function build(
         const { loadedEnvFiles } = traceLocalSpan(
           {
             name: 'load-dotenv',
-            parentSpan: nextBuildSpan,
-            tooling: {},
+            parent: nextBuildSpan,
             synchronous: true,
           },
           () => loadEnvConfig(dir, false, Log)
@@ -1207,7 +1205,7 @@ export default async function build(
         const turborepoAccessTraceResult = new TurborepoAccessTraceResult()
         let experimentalFeatures: ConfiguredExperimentalFeature[] = []
         const config: NextConfigComplete = await traceLocalSpan(
-          { name: 'load-next-config', parentSpan: nextBuildSpan, tooling: {} },
+          { name: 'load-next-config', parent: nextBuildSpan },
           () =>
             turborepoTraceAccess(
               () =>
@@ -1339,8 +1337,7 @@ export default async function build(
           await traceLocalSpan(
             {
               name: 'inline-static-env',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             async () => {
               await inlineStaticEnv({
@@ -1363,8 +1360,7 @@ export default async function build(
         const customRoutes: CustomRoutes = await traceLocalSpan(
           {
             name: 'load-custom-routes',
-            parentSpan: nextBuildSpan,
-            tooling: {},
+            parent: nextBuildSpan,
           },
           () => loadCustomRoutes(config)
         )
@@ -1378,7 +1374,7 @@ export default async function build(
         const hasRewrites = combinedRewrites.length > 0
         NextBuildContext.hasRewrites = hasRewrites
         const distDirCreated = await traceLocalSpan(
-          { name: 'create-dist-dir', parentSpan: nextBuildSpan, tooling: {} },
+          { name: 'create-dist-dir', parent: nextBuildSpan },
           async () => {
             try {
               await fs.mkdir(distDir, { recursive: true })
@@ -1408,13 +1404,11 @@ export default async function build(
         }
 
         if (config.cleanDistDir && !isGenerateMode) {
-          await traceLocalSpan(
-            { name: 'clean', parentSpan: nextBuildSpan, tooling: {} },
-            () =>
-              recursiveDeleteSyncWithAsyncRetries(
-                distDir,
-                new Set(['cache', 'dev', 'diagnostics', 'lock', 'trace'])
-              )
+          await traceLocalSpan({ name: 'clean', parent: nextBuildSpan }, () =>
+            recursiveDeleteSyncWithAsyncRetries(
+              distDir,
+              new Set(['cache', 'dev', 'diagnostics', 'lock', 'trace'])
+            )
           )
         }
 
@@ -1586,7 +1580,7 @@ export default async function build(
         NextBuildContext.previewProps = previewProps
 
         const discovery = await traceLocalSpan(
-          { name: 'discover-routes', parentSpan: nextBuildSpan, tooling: {} },
+          { name: 'discover-routes', parent: nextBuildSpan },
           () =>
             discoverRoutes({
               appDir,
@@ -1612,8 +1606,7 @@ export default async function build(
         NextBuildContext.mappedRootPaths = await traceLocalSpan(
           {
             name: 'create-root-mapping',
-            parentSpan: nextBuildSpan,
-            tooling: {},
+            parent: nextBuildSpan,
           },
           () =>
             createPagesMapping({
@@ -1688,8 +1681,7 @@ export default async function build(
         await traceLocalSpan(
           {
             name: 'generate-route-types',
-            parentSpan: nextBuildSpan,
-            tooling: {},
+            parent: nextBuildSpan,
           },
           async () => {
             const routeTypesFilePath = path.join(
@@ -1782,8 +1774,7 @@ export default async function build(
         await traceLocalSpan(
           {
             name: 'public-dir-conflict-check',
-            parentSpan: nextBuildSpan,
-            tooling: {},
+            parent: nextBuildSpan,
           },
           async () => {
             // Check if pages conflict with files in `public`
@@ -1843,8 +1834,7 @@ export default async function build(
         const { routesManifest, dynamicRoutes, sourcePages } = traceLocalSpan(
           {
             name: 'generate-routes-manifest',
-            parentSpan: nextBuildSpan,
-            tooling: {},
+            parent: nextBuildSpan,
             synchronous: true,
           },
           () =>
@@ -2014,7 +2004,7 @@ export default async function build(
 
                   buildTracesPromise = getTracer().trace(
                     ToolingSpan.collectBuildTraces,
-                    { parentSpan: nextBuildSpan },
+                    { parent: nextBuildSpan },
                     () => {
                       return buildTraceWorker
                         .collectBuildTraces({
@@ -2122,8 +2112,7 @@ export default async function build(
         const requiredServerFilesManifest = await traceLocalSpan(
           {
             name: 'generate-required-server-files',
-            parentSpan: nextBuildSpan,
-            tooling: {},
+            parent: nextBuildSpan,
           },
           async () => {
             let runtimeConfig = getNextConfigRuntime(config)
@@ -2443,7 +2432,7 @@ export default async function build(
           functionsConfigManifest,
         } = await getTracer().trace(
           ToolingSpan.staticCheck,
-          { parentSpan: nextBuildSpan },
+          { parent: nextBuildSpan },
           async (staticCheckSpan) => {
             const checkedFunctionsConfigManifest: FunctionsConfigManifest = {
               version: 1,
@@ -2464,8 +2453,7 @@ export default async function build(
 
             const nonStaticErrorPageSpan = createLocalSpan({
               name: 'check-static-error-page',
-              parentSpan: staticCheckSpan,
-              tooling: {},
+              parent: staticCheckSpan,
             })
             const errorPageHasCustomGetInitialProps = traceLocalSpan(
               { span: nonStaticErrorPageSpan },
@@ -2606,8 +2594,7 @@ export default async function build(
                   return traceLocalSpan(
                     {
                       name: 'check-page',
-                      parentSpan: staticCheckSpan,
-                      tooling: {},
+                      parent: staticCheckSpan,
                       attributes: { page },
                     },
                     async (checkPageSpan) => {
@@ -2723,8 +2710,7 @@ export default async function build(
 
                             const isPageStaticSpan = createLocalSpan({
                               name: 'is-page-static',
-                              parentSpan: checkPageSpan,
-                              tooling: {},
+                              parent: checkPageSpan,
                             })
                             let workerResult = await traceLocalSpan(
                               { span: isPageStaticSpan },
@@ -3141,7 +3127,7 @@ export default async function build(
         ) {
           buildTracesPromise = getTracer().trace(
             ToolingSpan.collectBuildTraces,
-            { parentSpan: nextBuildSpan },
+            { parent: nextBuildSpan },
             () => {
               const { collectBuildTraces } =
                 require('./collect-build-traces') as typeof import('./collect-build-traces')
@@ -3200,8 +3186,7 @@ export default async function build(
         await traceLocalSpan(
           {
             name: 'write-routes-manifest',
-            parentSpan: nextBuildSpan,
-            tooling: {},
+            parent: nextBuildSpan,
           },
           () => writeManifest(routesManifestPath, routesManifest)
         )
@@ -3267,8 +3252,7 @@ export default async function build(
           await traceLocalSpan(
             {
               name: 'inline-static-env',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             async () => {
               await inlineStaticEnv({
@@ -3351,7 +3335,7 @@ export default async function build(
         ) {
           await getTracer().trace(
             ToolingSpan.staticGeneration,
-            { parentSpan: nextBuildSpan },
+            { parent: nextBuildSpan },
             async (staticGenerationSpan) => {
               detectConflictingPaths(
                 [
@@ -4378,8 +4362,7 @@ export default async function build(
                 return traceLocalSpan(
                   {
                     name: 'move-exported-app-not-found-',
-                    parentSpan: staticGenerationSpan,
-                    tooling: {},
+                    parent: staticGenerationSpan,
                   },
                   async () => {
                     const orig = path.join(
@@ -4428,8 +4411,7 @@ export default async function build(
                 return traceLocalSpan(
                   {
                     name: 'move-exported-app-global-error-',
-                    parentSpan: staticGenerationSpan,
-                    tooling: {},
+                    parent: staticGenerationSpan,
                   },
                   async () => {
                     // If static 500.html exists in pages router, don't move it
@@ -4683,8 +4665,7 @@ export default async function build(
           await traceLocalSpan(
             {
               name: 'write-routes-manifest',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             () => writeManifest(routesManifestPath, routesManifest)
           )
@@ -4872,8 +4853,7 @@ export default async function build(
           await traceLocalSpan(
             {
               name: 'verify-partytown-setup',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             async () => {
               await verifyPartytownSetup(
@@ -4948,8 +4928,7 @@ export default async function build(
           await traceLocalSpan(
             {
               name: 'output-export-full-static-export',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             async () => {
               await writeFullyStaticExport(
@@ -4974,8 +4953,7 @@ export default async function build(
           await traceLocalSpan(
             {
               name: 'adapter-handle-build-complete',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             async () => {
               await handleBuildComplete({
@@ -5013,8 +4991,7 @@ export default async function build(
           await traceLocalSpan(
             {
               name: 'output-standalone',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             async () => {
               await writeStandaloneDirectory(
@@ -5045,8 +5022,7 @@ export default async function build(
           traceLocalSpan(
             {
               name: 'print-custom-routes',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
               synchronous: true,
             },
             () =>
@@ -5060,7 +5036,7 @@ export default async function build(
         }
 
         await traceLocalSpan(
-          { name: 'print-tree-view', parentSpan: nextBuildSpan, tooling: {} },
+          { name: 'print-tree-view', parent: nextBuildSpan },
           () =>
             printTreeView(pageKeys, pageInfos, {
               pagesDir,
@@ -5084,15 +5060,14 @@ export default async function build(
           await traceLocalSpan(
             {
               name: 'write-route-bundle-stats',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             () => writeRouteBundleStats(pageKeys, buildManifest, distDir, dir)
           )
         }
 
         await traceLocalSpan(
-          { name: 'telemetry-flush', parentSpan: nextBuildSpan, tooling: {} },
+          { name: 'telemetry-flush', parent: nextBuildSpan },
           () => telemetry.flush()
         )
 

@@ -22,8 +22,7 @@ async function nextBabelLoader(
   const loaderOptions: any = traceLocalSpan(
     {
       name: 'get-options',
-      parentSpan: parentTrace,
-      tooling: {},
+      parent: parentTrace,
       synchronous: true,
     },
     () => ctx.getOptions()
@@ -37,8 +36,7 @@ async function nextBabelLoader(
     await traceLocalSpan(
       {
         name: 'next-babel-turbo-transform',
-        parentSpan: parentTrace,
-        tooling: {},
+        parent: parentTrace,
       },
       async (loaderSpanInner) =>
         await transform(
@@ -66,8 +64,7 @@ function nextBabelLoaderOuter(
   traceLocalSpan(
     {
       name: 'next-babel-turbo-loader',
-      parentSpan: this.currentTraceSpan,
-      tooling: {},
+      parent: this.currentTraceSpan,
     },
     (loaderSpan) =>
       nextBabelLoader(this, loaderSpan, inputSource, inputSourceMap)

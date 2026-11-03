@@ -51,15 +51,14 @@ export function generateClientManifest(
     ? getCompilationSpan(compilation)
     : compiler
       ? getCompilationSpan(compiler)
-      : createLocalSpan({ name: 'client-manifest', tooling: {} })
+      : createLocalSpan({ name: 'client-manifest' })
 
   if (!compilationSpan) return undefined
 
   return traceLocalSpan(
     {
       name: 'NextJsBuildManifest-generateClientManifest',
-      parentSpan: compilationSpan,
-      tooling: {},
+      parent: compilationSpan,
       synchronous: true,
     },
     () => {
@@ -147,8 +146,7 @@ export default class BuildManifestPlugin {
     return traceLocalSpan(
       {
         name: 'NextJsBuildManifest-createassets',
-        parentSpan: compilationSpan,
-        tooling: {},
+        parent: compilationSpan,
         synchronous: true,
       },
       () => {

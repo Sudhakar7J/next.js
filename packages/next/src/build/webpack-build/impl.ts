@@ -100,7 +100,7 @@ export async function webpackBuildImpl(
     serverConfig: serverWebpackConfig,
   } = await getTracer().trace(
     ToolingSpan.runWebpackCompiler,
-    { parentSpan: nextBuildSpan },
+    { parent: nextBuildSpan },
     async (runWebpackSpan) => {
       const hasDeferredEntries =
         config.experimental.deferredEntries &&
@@ -110,8 +110,7 @@ export async function webpackBuildImpl(
       const entrypoints = await traceLocalSpan(
         {
           name: 'create-entrypoints',
-          parentSpan: nextBuildSpan,
-          tooling: {},
+          parent: nextBuildSpan,
         },
         () =>
           createEntrypoints({
@@ -138,8 +137,7 @@ export async function webpackBuildImpl(
         ? await traceLocalSpan(
             {
               name: 'create-deferred-entrypoints',
-              parentSpan: nextBuildSpan,
-              tooling: {},
+              parent: nextBuildSpan,
             },
             () =>
               createEntrypoints({
@@ -183,8 +181,7 @@ export async function webpackBuildImpl(
       const configs = await traceLocalSpan(
         {
           name: 'generate-webpack-config',
-          parentSpan: runWebpackSpan,
-          tooling: {},
+          parent: runWebpackSpan,
         },
         async () => {
           const info = await loadProjectInfo({
@@ -355,8 +352,7 @@ export async function webpackBuildImpl(
   result = traceLocalSpan(
     {
       name: 'format-webpack-messages',
-      parentSpan: nextBuildSpan,
-      tooling: {},
+      parent: nextBuildSpan,
       synchronous: true,
     },
     () => formatWebpackMessages(result, true)

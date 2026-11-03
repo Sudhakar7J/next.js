@@ -137,7 +137,7 @@ export async function startTypeChecking({
   try {
     const [verifyResult, typeCheckEnd] = await getTracer().trace(
       ToolingSpan.runTypeScript,
-      { parentSpan: nextBuildSpan },
+      { parent: nextBuildSpan },
       () =>
         verifyAndRunTypeScript(
           dir,

@@ -11,8 +11,7 @@ export default async function nextFontLoader(this: any) {
   return traceLocalSpan(
     {
       name: 'next-font-loader',
-      parentSpan: this.currentTraceSpan,
-      tooling: {},
+      parent: this.currentTraceSpan,
     },
     async (nextFontLoaderSpan) => {
       const callback = this.async()
@@ -113,7 +112,7 @@ export default async function nextFontLoader(this: any) {
           style,
           variable,
         } = await traceLocalSpan(
-          { name: 'font-loader', parentSpan: nextFontLoaderSpan, tooling: {} },
+          { name: 'font-loader', parent: nextFontLoaderSpan },
           () =>
             fontLoader({
               functionName,
@@ -148,7 +147,7 @@ export default async function nextFontLoader(this: any) {
 
         // Add CSS classes, exports and make the font-family locally scoped by turning it unguessable
         const result = await traceLocalSpan(
-          { name: 'postcss', parentSpan: nextFontLoaderSpan, tooling: {} },
+          { name: 'postcss', parent: nextFontLoaderSpan },
           () =>
             postcss(
               postcssNextFontPlugin({

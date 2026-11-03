@@ -70,8 +70,7 @@ export class CssMinimizerPlugin {
           return traceLocalSpan(
             {
               name: 'css-minimizer-plugin',
-              parentSpan: compilationSpan,
-              tooling: {},
+              parent: compilationSpan,
             },
             async (cssMinimizerSpan) => {
               const files = Object.keys(assets)
@@ -82,9 +81,8 @@ export class CssMinimizerPlugin {
                     return traceLocalSpan(
                       {
                         name: 'minify-css',
-                        parentSpan: cssMinimizerSpan,
+                        parent: cssMinimizerSpan,
                         attributes: { file },
-                        tooling: {},
                       },
                       async (assetSpan) => {
                         const assetSource = compilation.getAsset(file).source

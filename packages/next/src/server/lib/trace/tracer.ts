@@ -2,8 +2,9 @@ import type { FetchEventResult } from '../../web/types'
 import type { TextMapSetter } from '@opentelemetry/api'
 import { api, getTracerInstance } from './otel-api'
 import type { SpanTypes } from './constants'
-import type { LocalSpanRecorder } from './local-span-recorder'
-import type { ToolingSpanOptions } from '../../../trace/trace'
+import type { LocalSpanRecorder } from './request-span-recorder'
+import type { LocalSpanTiming } from '../../../trace/trace'
+import type { SpanId } from '../../../trace/types'
 import {
   LogSpanAllowList,
   NextVanillaSpanAllowlist,
@@ -104,11 +105,22 @@ type TracerSpanOptions = Omit<SpanOptions, 'attributes'> & {
   hideSpan?: boolean
 }
 
-type ToolingTracerSpanOptions = Omit<TracerSpanOptions, 'attributes'> & {
-  attributes?: Record<string, unknown>
-  // Optional exact local clocks/numeric identity, not a destination selector.
-  source?: ToolingSpanOptions
-}
+type ToolingTracerSpanOptions = Omit<
+  TracerSpanOptions,
+  'attributes' | 'parentSpan'
+> &
+  LocalSpanTiming & {
+    attributes?: Record<string, unknown>
+    parent?: Span | SpanId | null
+  }
+
+// The implementation serves both APIs; the overloads keep their parent inputs
+// distinct so a coarse operation cannot specify two competing parents.
+type InternalSpanOptions = TracerSpanOptions &
+  Pick<
+    ToolingTracerSpanOptions,
+    'parent' | 'monotonicStartTime' | 'wallStartTimeMs'
+  >
 
 interface NextTracer {
   getContext(): ContextAPI
@@ -445,7 +457,7 @@ class NextTracerImpl implements NextTracer {
       options,
     }: {
       fn: (span?: Span, done?: (error?: Error) => any) => T | Promise<T>
-      options: TracerSpanOptions
+      options: InternalSpanOptions
     } =
       typeof fnOrOptions === 'function'
         ? {
@@ -460,17 +472,18 @@ class NextTracerImpl implements NextTracer {
     const spanName = options.spanName ?? type
 
     const toolingRecorder = tooling ? getToolingSpanRecorder() : undefined
-    const candidateParent =
-      options.parentSpan ??
-      (tooling
+    const candidateParent = tooling
+      ? options.parent === undefined
         ? toolingRecorder?.getActiveLocalSpan()
-        : this.getRequestScopeSpan())
-    const parentSpan =
-      tooling &&
-      candidateParent &&
-      !toolingRecorder?.getToolingSpanSource(candidateParent)
-        ? undefined
-        : candidateParent
+        : options.parent
+      : (options.parentSpan ?? this.getRequestScopeSpan())
+    const parentSpan = tooling
+      ? candidateParent &&
+        typeof candidateParent === 'object' &&
+        toolingRecorder?.getToolingSpanSource(candidateParent)
+        ? candidateParent
+        : undefined
+      : (candidateParent as Span | undefined)
     const isolatedParentSpan =
       parentSpan && localSpanRecorder?.isOpenTelemetryIsolatedSpan(parentSpan)
         ? parentSpan
@@ -684,7 +697,7 @@ class NextTracerImpl implements NextTracer {
   private createLocalRecordingSpan(
     type: SpanTypes,
     name: string,
-    options: TracerSpanOptions,
+    options: InternalSpanOptions,
     parentContext: Context,
     delegateSpan?: Span,
     parentSpan?: Span,
@@ -696,8 +709,13 @@ class NextTracerImpl implements NextTracer {
         const span = recorder.createLocalSpan({
           name,
           attributes: options.attributes,
-          parentSpan,
-          tooling: (options as ToolingTracerSpanOptions).source ?? {},
+          parent:
+            typeof options.parent === 'number' || options.parent === null
+              ? options.parent
+              : parentSpan,
+          startTime: options.startTime,
+          monotonicStartTime: options.monotonicStartTime,
+          wallStartTimeMs: options.wallStartTimeMs,
         })
         if (process.env.NEXT_EXPERIMENTAL_OTEL_TOOLING === '1') {
           const source = recorder.getToolingSpanSource(span)!
@@ -735,7 +753,7 @@ class NextTracerImpl implements NextTracer {
       publicParentSpan: trace.getSpan(parentContext),
       traceId: delegateSpanContext?.traceId ?? parentSpanContext?.traceId,
       spanId: delegateSpanContext?.spanId,
-      parentSpanId: parentSpanContext?.spanId,
+      parent: parentSpan ?? trace.getSpan(parentContext),
       isolateOpenTelemetry,
     })
   }
@@ -806,7 +824,7 @@ class NextTracerImpl implements NextTracer {
   public startSpan(...args: Array<any>): Span {
     const [type, passedOptions]: [SpanTypes, TracerSpanOptions | undefined] =
       args as any
-    const options: TracerSpanOptions = passedOptions
+    const options: InternalSpanOptions = passedOptions
       ? {
           ...passedOptions,
           attributes: {
@@ -819,9 +837,13 @@ class NextTracerImpl implements NextTracer {
     if (ToolingSpanTypes.has(type)) {
       const recorder = getToolingSpanRecorder()!
       const candidateParent =
-        options.parentSpan ?? recorder.getActiveLocalSpan()
+        options.parent === undefined
+          ? recorder.getActiveLocalSpan()
+          : options.parent
       const parentSpan =
-        candidateParent && recorder.getToolingSpanSource(candidateParent)
+        candidateParent &&
+        typeof candidateParent === 'object' &&
+        recorder.getToolingSpanSource(candidateParent)
           ? candidateParent
           : undefined
       return this.createLocalRecordingSpan(

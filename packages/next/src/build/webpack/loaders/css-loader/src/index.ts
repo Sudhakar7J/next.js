@@ -143,7 +143,7 @@ export default async function loader(
   const callback = this.async()
 
   traceLocalSpan(
-    { name: 'css-loader', parentSpan: this.currentTraceSpan, tooling: {} },
+    { name: 'css-loader', parent: this.currentTraceSpan },
     async (loaderSpan) => {
       let options: any
 

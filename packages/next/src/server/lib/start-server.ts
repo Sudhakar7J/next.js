@@ -275,7 +275,6 @@ export async function startServer(
         )
         createLocalSpan({
           name: 'server-restart-close-to-memory-threshold',
-          tooling: {},
           attributes: {
             'memory.heapSizeLimit': String(memoryRestartStats.heap_size_limit),
             'memory.heapUsed': String(memoryRestartStats.used_heap_size),

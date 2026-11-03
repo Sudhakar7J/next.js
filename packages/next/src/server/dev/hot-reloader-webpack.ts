@@ -714,21 +714,18 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
   }
 
   private async clean(span: Span): Promise<void> {
-    return traceLocalSpan(
-      { name: 'clean', parentSpan: span, tooling: {} },
-      () =>
-        recursiveDeleteSyncWithAsyncRetries(
-          join(this.dir, this.config.distDir),
-          new Set(['cache', 'lock'])
-        )
+    return traceLocalSpan({ name: 'clean', parent: span }, () =>
+      recursiveDeleteSyncWithAsyncRetries(
+        join(this.dir, this.config.distDir),
+        new Set(['cache', 'lock'])
+      )
     )
   }
 
   private async getWebpackConfig(span: Span) {
     const webpackConfigSpan = createLocalSpan({
       name: 'get-webpack-config',
-      parentSpan: span,
-      tooling: {},
+      parent: span,
     })
 
     const pageExtensions = this.config.pageExtensions
@@ -739,8 +736,7 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
         : await traceLocalSpan(
             {
               name: 'get-page-paths',
-              parentSpan: webpackConfigSpan,
-              tooling: {},
+              parent: webpackConfigSpan,
             },
             () =>
               Promise.all([
@@ -757,8 +753,7 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
       this.pagesMapping = await traceLocalSpan(
         {
           name: 'create-pages-mapping',
-          parentSpan: webpackConfigSpan,
-          tooling: {},
+          parent: webpackConfigSpan,
         },
         () =>
           createPagesMapping({
@@ -777,8 +772,7 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
       const entrypoints = await traceLocalSpan(
         {
           name: 'create-entrypoints',
-          parentSpan: webpackConfigSpan,
-          tooling: {},
+          parent: webpackConfigSpan,
         },
         () =>
           createEntrypoints({
@@ -810,8 +804,7 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
       return traceLocalSpan(
         {
           name: 'generate-webpack-config',
-          parentSpan: webpackConfigSpan,
-          tooling: {},
+          parent: webpackConfigSpan,
         },
         async () => {
           const info = await loadProjectInfo({
@@ -913,7 +906,7 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
 
   private async tracedGetVersionInfo(span: Span) {
     return traceLocalSpan(
-      { name: 'get-version-info', parentSpan: span, tooling: {} },
+      { name: 'get-version-info', parent: span },
       async () => getVersionInfo()
     )
   }
@@ -921,8 +914,7 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
   public async start(): Promise<void> {
     const startSpan = createLocalSpan({
       name: 'start',
-      parentSpan: this.hotReloaderSpan,
-      tooling: {},
+      parent: this.hotReloaderSpan,
     })
     startSpan.end() // Stop immediately to create an artificial parent span
 
@@ -1943,9 +1935,8 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
     return traceLocalSpan(
       {
         name: 'ensure-page',
-        parentSpan: this.hotReloaderSpan,
+        parent: this.hotReloaderSpan,
         attributes: { inputPage: page },
-        tooling: {},
       },
       async () => {
         // Make sure we don't re-build or dispose prebuilt pages

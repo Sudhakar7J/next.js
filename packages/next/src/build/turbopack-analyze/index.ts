@@ -107,7 +107,6 @@ export async function turbopackAnalyze(
 
     const analyzeEventsSpan = createLocalSpan({
       name: 'turbopack-analyze-events',
-      tooling: {},
     })
     // End immediately: this span is only used as a parent for
     // completed observations which carry their own timestamps.
