@@ -31,7 +31,6 @@ describe('segment-config-precedence', () => {
               'intercept',
               'slot-edge-runtime',
               'entry-config',
-              'duration-above-u32',
               'layout-extensions',
             ].map((route) => `!app/${route}/**`),
           ].join(','),
@@ -498,8 +497,6 @@ describe('segment-config-precedence', () => {
     ).toBeDefined()
   })
 
-  // TODO: Match webpack's accepted maxDuration range instead of narrowing to u32.
-  // @force-gate !turbopack
   it('accepts maxDuration above the u32 boundary and preserves its manifest value', async () => {
     const $ = await next.render$('/duration-above-u32')
     expect($('#children').text()).toBe('children')
