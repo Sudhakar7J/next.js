@@ -31,7 +31,6 @@ describe('segment-config-precedence', () => {
               'intercept',
               'slot-edge-runtime',
               'entry-config',
-              'layout-extensions',
             ].map((route) => `!app/${route}/**`),
           ].join(','),
         ]
@@ -508,8 +507,6 @@ describe('segment-config-precedence', () => {
     })
   })
 
-  // TODO: Use the first page extension consistently for layout selection and runtime.
-  // @force-gate !turbopack
   it('uses the first page extension for both the layout and its runtime', async () => {
     const $ = await next.render$('/layout-extensions')
     expect($('#layout').text()).toBe('jsx')

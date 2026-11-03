@@ -360,6 +360,7 @@ async fn get_directory_tree_internal(
 
     let mut subdirectories = BTreeMap::new();
     let mut modules = AppDirModules::default();
+    let mut module_extension_priorities = BTreeMap::new();
 
     let mut metadata_icon = Vec::new();
     let mut metadata_apple = Vec::new();
@@ -375,8 +376,13 @@ async fn get_directory_tree_internal(
                     continue;
                 }
                 if let Some((stem, ext)) = basename.split_once('.')
-                    && page_extensions_value.iter().any(|e| e == ext)
+                    && let Some(priority) = page_extensions_value.iter().position(|e| e == ext)
+                    && module_extension_priorities
+                        .get(stem)
+                        .is_none_or(|previous| priority < *previous)
                 {
+                    // Directory iteration order must not decide which extension wins.
+                    // Match webpack's first configured page extension for each special file.
                     match stem {
                         "page" => modules.page = Some(file.clone()),
                         "layout" => modules.layout = Some(file.clone()),
@@ -392,6 +398,7 @@ async fn get_directory_tree_internal(
                         "route" => modules.route = Some(file.clone()),
                         _ => {}
                     }
+                    module_extension_priorities.insert(stem, priority);
                 }
 
                 let Some(MetadataFileMatch {
